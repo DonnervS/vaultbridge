@@ -1,0 +1,9 @@
+{
+  "id": "vaultbridge",
+  "name": "Vaultbridge",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Ende-zu-Ende-verschlüsseltes Vault-Sync gegen CouchDB mit Konflikt-Diff-Ansicht, Setup-String und Mobile-Support.",
+  "author": "Markus Wenzel",
+  "isDesktopOnly": false
+}
