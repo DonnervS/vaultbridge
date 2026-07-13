@@ -39,6 +39,9 @@ export function decodeSetup(str: string): SetupPayload {
   } catch {
     throw new Error("Setup-String beschädigt: Nutzlast konnte nicht dekodiert werden.");
   }
+  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+    throw new Error("Setup-String beschädigt: Nutzlast ist kein gültiges Objekt.");
+  }
   if (obj.v !== 1) {
     throw new Error(`Nicht unterstützte Setup-Version: ${obj.v}`);
   }
@@ -46,6 +49,9 @@ export function decodeSetup(str: string): SetupPayload {
     if (obj[field] === undefined) {
       throw new Error(`Setup-String unvollständig: Feld "${field}" fehlt.`);
     }
+  }
+  if (obj.pp !== "embedded" && obj.pp !== "separate") {
+    throw new Error(`Setup-String ungültig: unbekannter Passphrase-Modus "${obj.pp}".`);
   }
   if (obj.pp === "embedded" && !obj.passphrase) {
     throw new Error("Setup-String: eingebetteter Modus, aber keine Passphrase enthalten.");

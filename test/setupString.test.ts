@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { encodeSetup, decodeSetup, SetupPayload } from "../src/setup/setupString";
+import { bytesToBase64url, utf8 } from "../src/crypto/encoding";
 
 function samplePayload(overrides: Partial<SetupPayload> = {}): SetupPayload {
   return {
@@ -54,5 +55,24 @@ describe("setupString", () => {
   it("akzeptiert getrennten Modus ohne Passphrase", () => {
     const p = samplePayload({ pp: "separate", passphrase: undefined });
     expect(decodeSetup(encodeSetup(p)).pp).toBe("separate");
+  });
+
+  it("wirft deutsche Meldung bei JSON-null als Nutzlast", () => {
+    const str = "vbridge1:" + bytesToBase64url(utf8.encode("null"));
+    expect(() => decodeSetup(str)).toThrow(/kein gültiges Objekt/);
+  });
+
+  it("wirft bei unbekanntem Passphrase-Modus", () => {
+    const p: any = samplePayload({ pp: "separate" });
+    p.pp = "foo";
+    const str = "vbridge1:" + bytesToBase64url(utf8.encode(JSON.stringify(p)));
+    expect(() => decodeSetup(str)).toThrow(/Passphrase-Modus/);
+  });
+
+  it("wirft bei nicht unterstützter Version", () => {
+    const p: any = samplePayload();
+    p.v = 2;
+    const str = "vbridge1:" + bytesToBase64url(utf8.encode(JSON.stringify(p)));
+    expect(() => decodeSetup(str)).toThrow(/Version/);
   });
 });
