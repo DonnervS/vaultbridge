@@ -58,6 +58,13 @@ describe("testConnection", () => {
     expect(r.step).toBe("db");
   });
 
+  it("meldet Auth-Fehler bei 401 auf dem DB-Endpunkt, wenn die Root ohne Auth antwortet", async () => {
+    const fetchFn = fakeFetch({ "vault_abc": { status: 401 }, "6984/": { status: 200 } });
+    const r = await testConnection(base, fetchFn);
+    expect(r.ok).toBe(false);
+    expect(r.step).toBe("auth");
+  });
+
   it("meldet db-Fehler, wenn der zweite Request wirft", async () => {
     let calls = 0;
     const fetchFn = (async () => {

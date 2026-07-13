@@ -31,6 +31,9 @@ export async function testConnection(
   } catch (e) {
     return { ok: false, step: "db", message: `Datenbank nicht erreichbar: ${String(e)}` };
   }
+  if (db.status === 401 || db.status === 403) {
+    return { ok: false, step: "auth", message: "Zugangsdaten abgelehnt (401/403). Benutzer/Passwort prüfen." };
+  }
   if (db.status === 404) {
     return { ok: true, step: "db", message: "Verbindung und Auth ok. Datenbank existiert noch nicht (wird beim ersten Sync angelegt)." };
   }
