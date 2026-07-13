@@ -44,4 +44,29 @@ describe("testConnection", () => {
     expect(r.ok).toBe(true);
     expect(r.step).toBe("db");
   });
+
+  it("meldet url-Fehler bei 500 auf dem Root-Endpunkt", async () => {
+    const r = await testConnection(base, fakeFetch({ "6984/": { status: 500 } }));
+    expect(r.ok).toBe(false);
+    expect(r.step).toBe("url");
+  });
+
+  it("meldet db-Fehler bei 500 auf dem DB-Endpunkt", async () => {
+    const fetchFn = fakeFetch({ "vault_abc": { status: 500 }, "6984/": { status: 200 } });
+    const r = await testConnection(base, fetchFn);
+    expect(r.ok).toBe(false);
+    expect(r.step).toBe("db");
+  });
+
+  it("meldet db-Fehler, wenn der zweite Request wirft", async () => {
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls++;
+      if (calls === 1) return { status: 200, ok: true } as Response;
+      throw new Error("Verbindung verloren");
+    }) as unknown as typeof fetch;
+    const r = await testConnection(base, fetchFn);
+    expect(r.ok).toBe(false);
+    expect(r.step).toBe("db");
+  });
 });

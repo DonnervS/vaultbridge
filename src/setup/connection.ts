@@ -15,7 +15,7 @@ export async function testConnection(
   try {
     root = await fetchFn(rootUrl, { headers: { Authorization: authHeader } });
   } catch (e) {
-    return { ok: false, step: "url", message: `Server nicht erreichbar: ${(e as Error).message}` };
+    return { ok: false, step: "url", message: `Server nicht erreichbar: ${String(e)}` };
   }
   if (root.status === 401 || root.status === 403) {
     return { ok: false, step: "auth", message: "Zugangsdaten abgelehnt (401/403). Benutzer/Passwort prüfen." };
@@ -24,8 +24,13 @@ export async function testConnection(
     return { ok: false, step: "url", message: `Unerwartete Serverantwort: HTTP ${root.status}.` };
   }
 
-  const dbUrl = payload.couchUrl.replace(/\/$/, "") + "/" + encodeURIComponent(payload.db);
-  const db = await fetchFn(dbUrl, { headers: { Authorization: authHeader } });
+  const dbUrl = rootUrl + encodeURIComponent(payload.db);
+  let db: Response;
+  try {
+    db = await fetchFn(dbUrl, { headers: { Authorization: authHeader } });
+  } catch (e) {
+    return { ok: false, step: "db", message: `Datenbank nicht erreichbar: ${String(e)}` };
+  }
   if (db.status === 404) {
     return { ok: true, step: "db", message: "Verbindung und Auth ok. Datenbank existiert noch nicht (wird beim ersten Sync angelegt)." };
   }
