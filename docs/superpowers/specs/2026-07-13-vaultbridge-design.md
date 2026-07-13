@@ -188,7 +188,7 @@ Ein Flag im String (`pp: embedded|separate`) signalisiert dem Client, ob nach de
 vbridge1:<base64url(payload)>
 ```
 
-`payload` (JSON, evtl. selbst nochmal verschlüsselt bei „getrennt"):
+`payload` (JSON, base64url-kodiert; im Modus „getrennt" fehlt schlicht das `passphrase`-Feld — die Server-Zugangsdaten bleiben lesbar, damit sich der Client verbinden kann, bevor die Passphrase eingegeben wird):
 
 ```jsonc
 {
