@@ -2,6 +2,7 @@ import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type VaultbridgePlugin from "../main";
 import { decodeSetup } from "../setup/setupString";
 import { runSelfTest } from "../setup/selfTest";
+import { promptPassphrase } from "./PassphrasePromptModal";
 
 export class VaultbridgeSettingsTab extends PluginSettingTab {
   plugin: VaultbridgePlugin;
@@ -60,7 +61,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
     }
     let passphrase = payload.passphrase ?? "";
     if (payload.pp === "separate") {
-      passphrase = window.prompt("Passphrase eingeben:") ?? "";
+      passphrase = (await promptPassphrase(this.app, "Passphrase eingeben")) ?? "";
       if (!passphrase) {
         new Notice("Selbsttest abgebrochen: keine Passphrase eingegeben.");
         return;

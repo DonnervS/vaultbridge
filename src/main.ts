@@ -12,7 +12,7 @@ const DEFAULT_SETTINGS: VaultbridgeSettings = {
 };
 
 export default class VaultbridgePlugin extends Plugin {
-  settings: VaultbridgeSettings = DEFAULT_SETTINGS;
+  settings: VaultbridgeSettings = { ...DEFAULT_SETTINGS };
 
   async onload(): Promise<void> {
     await this.loadSettings();
