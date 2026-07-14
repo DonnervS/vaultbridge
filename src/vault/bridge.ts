@@ -3,6 +3,10 @@ import { VaultStore } from "../store/store";
 import { EchoGuard, contentHash, decideVaultAction } from "./applyChange";
 import { FileMeta } from "../store/model";
 
+// Sentinel-"Hash" für Löschungen: der Echo-Guard arbeitet sonst mit Inhalts-
+// Hashes; eine Löschung hat keinen Inhalt, daher ein fester, kollisionsfreier Wert.
+const DELETE_SENTINEL = "__vaultbridge_deleted__";
+
 /**
  * Verbindet Obsidian-Vault-Ereignisse mit dem VaultStore in beide Richtungen:
  *  - lokale Datei-Events  -> Store  (ausgehend)
@@ -40,6 +44,7 @@ export class VaultBridge {
     };
     const onLocalDelete = async (file: TAbstractFile) => {
       try {
+        if (this.guard.isEcho(file.path, DELETE_SENTINEL)) return; // eigene Remote-Löschung
         await this.store.deleteFile(file.path);
       } catch (e) {
         new Notice(`Vaultbridge: Löschfehler bei ${file.path}: ${String(e)}`);
@@ -70,6 +75,7 @@ export class VaultBridge {
         existing instanceof TFile,
       );
       if (action === "delete" && existing instanceof TFile) {
+        this.guard.markApplied(note.path, DELETE_SENTINEL);
         await vault.delete(existing);
         return;
       }
