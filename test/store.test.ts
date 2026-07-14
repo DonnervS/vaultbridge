@@ -72,4 +72,33 @@ describe("VaultStore", () => {
     await store.putFile("b.md", utf8.encode("gleich!!"), meta);
     expect(utf8.decode((await store.getFile("b.md"))!.bytes)).toBe("gleich!!");
   });
+
+  it("listConflicts meldet einen echten Konflikt (divergente Änderungen)", async () => {
+    const keys = await deriveKeys("pw", salt, 50000);
+    const dbA = createTestPouch();
+    const dbB = createTestPouch();
+    const a = new VaultStore(dbA, keys, 64);
+    const b = new VaultStore(dbB, keys, 64);
+    await a.putFile("K.md", utf8.encode("basis"), meta);
+    await dbA.replicate.to(dbB);
+    await a.putFile("K.md", utf8.encode("variante A"), meta);
+    await b.putFile("K.md", utf8.encode("variante B"), meta);
+    await dbA.replicate.to(dbB);
+    expect((await b.listConflicts()).length).toBe(1);
+    await dbA.destroy();
+    await dbB.destroy();
+  });
+
+  it("subscribe benachrichtigt bei einer Note-Änderung (n:-Präfix)", async () => {
+    const store = await makeStore();
+    const got = new Promise<string>((resolve) => {
+      const sub = store.subscribe((id) => {
+        sub.cancel();
+        resolve(id);
+      });
+    });
+    await store.putFile("neu.md", utf8.encode("x"), meta);
+    const id = await got;
+    expect(id.startsWith("n:")).toBe(true);
+  });
 });

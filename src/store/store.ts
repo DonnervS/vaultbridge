@@ -16,7 +16,16 @@ export class VaultStore {
     for (const chunk of chunks) {
       const exists = await this.exists(chunk._id);
       if (!exists) {
-        await this.db.put(chunk);
+        try {
+          await this.db.put(chunk);
+        } catch (e) {
+          // Ein 409 bedeutet: ein paralleler Schreibvorgang hat denselben
+          // (inhaltsgleichen) Chunk bereits angelegt — genau das gewünschte
+          // Dedup. Andere Fehler weiterreichen.
+          const status = (e as { status?: number }).status;
+          const name = (e as { name?: string }).name;
+          if (status !== 409 && name !== "conflict") throw e;
+        }
       }
     }
 
