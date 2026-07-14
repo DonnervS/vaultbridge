@@ -31,10 +31,8 @@ export default class VaultbridgePlugin extends Plugin {
     this.addSettingTab(new VaultbridgeSettingsTab(this.app, this));
     this.addCommand({ id: "vaultbridge-connect", name: "Vaultbridge: Verbinden", callback: () => this.connect() });
     this.addCommand({ id: "vaultbridge-disconnect", name: "Vaultbridge: Trennen", callback: () => this.disconnect() });
-    if (this.settings.setupString) {
-      // Bewusst nicht automatisch verbinden, wenn eine Passphrase-Eingabe nötig ist.
-      // Der Nutzer startet den Sync über den Befehl oder Settings-Button.
-    }
+    // Kein Auto-Connect: der Nutzer startet den Sync über den Befehl
+    // "Vaultbridge: Verbinden" (nötig, weil eine Passphrase abgefragt werden kann).
   }
 
   async onunload(): Promise<void> {
@@ -42,6 +40,7 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   async connect(): Promise<void> {
+    this.disconnect(); // vorherige Verbindung sauber beenden (re-entrant-sicher)
     try {
       const payload = decodeSetup(this.settings.setupString);
       let passphrase = payload.passphrase ?? "";
@@ -71,6 +70,8 @@ export default class VaultbridgePlugin extends Plugin {
     this.syncHandle = null;
     this.bridge?.stop();
     this.bridge = null;
+    void this.localDb?.close();
+    this.localDb = null;
   }
 
   async loadSettings(): Promise<void> {
