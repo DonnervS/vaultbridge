@@ -8,7 +8,8 @@
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
     "test": "vitest run",
     "test:watch": "vitest",
-    "make-setup": "node scripts/make-setup-string.mjs"
+    "make-setup": "node scripts/make-setup-string.mjs",
+    "verify:bundle": "node scripts/verify-pouch-bundle.mjs"
   },
   "keywords": [
     "obsidian",

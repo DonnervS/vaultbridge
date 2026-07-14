@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { createTestPouch } from "./helpers/pouch";
 
 describe("pouchdb memory adapter", () => {
