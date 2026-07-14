@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production && node scripts/verify-pouch-bundle.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "make-setup": "node scripts/make-setup-string.mjs",

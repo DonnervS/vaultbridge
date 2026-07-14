@@ -30,14 +30,7 @@ export class VaultBridge {
       try {
         const bytes = new Uint8Array(await vault.readBinary(file));
         if (this.guard.isEcho(file.path, await contentHash(bytes))) return; // eigene Remote-Schreibung
-        const meta: FileMeta = {
-          mtime: file.stat.mtime,
-          ctime: file.stat.ctime,
-          size: file.stat.size,
-          mime: "",
-          isBinary: !/^(md|txt|json|css|ya?ml)$/i.test(file.extension),
-        };
-        await this.store.putFile(file.path, bytes, meta);
+        await this.store.putFile(file.path, bytes, this.metaOf(file));
       } catch (e) {
         new Notice(`Vaultbridge: Sync-Fehler bei ${file.path}: ${String(e)}`);
       }
@@ -62,6 +55,35 @@ export class VaultBridge {
 
     // Eingehende Remote-Änderungen anwenden.
     this.incoming = this.store.subscribe((id) => void this.applyRemote(id));
+
+    // Bestehende Dateien initial hochladen (Obsidian feuert für vorhandene
+    // Dateien kein create-Event).
+    void this.reconcileExisting();
+  }
+
+  private metaOf(file: TFile): FileMeta {
+    return {
+      mtime: file.stat.mtime,
+      ctime: file.stat.ctime,
+      size: file.stat.size,
+      mime: "",
+      isBinary: !/^(md|txt|json|css|ya?ml)$/i.test(file.extension),
+    };
+  }
+
+  private async reconcileExisting(): Promise<void> {
+    for (const file of this.app.vault.getFiles()) {
+      try {
+        const bytes = new Uint8Array(await this.app.vault.readBinary(file));
+        const existing = await this.store.getFile(file.path);
+        if (existing && (await contentHash(existing.bytes)) === (await contentHash(bytes))) {
+          continue; // unverändert -> kein erneuter Upload (idempotent, kein Churn)
+        }
+        await this.store.putFile(file.path, bytes, this.metaOf(file));
+      } catch (e) {
+        new Notice(`Vaultbridge: Erst-Abgleich fehlgeschlagen bei ${file.path}: ${String(e)}`);
+      }
+    }
   }
 
   private async applyRemote(id: string): Promise<void> {

@@ -14,4 +14,7 @@ export class StatusBar {
   setStatus(status: SyncStatus, info?: string): void {
     this.el.setText(LABELS[status] + (status === "error" && info ? ` (${info})` : ""));
   }
+  setInactive(): void {
+    this.el.setText("⚪ Vaultbridge: inaktiv");
+  }
 }

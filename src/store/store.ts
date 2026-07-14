@@ -55,7 +55,12 @@ export class VaultStore {
   }
 
   async listConflicts(): Promise<string[]> {
-    const res = await this.db.allDocs({ include_docs: true, conflicts: true });
+    const res = await this.db.allDocs({
+      include_docs: true,
+      conflicts: true,
+      startkey: "n:",
+      endkey: "n:￰",
+    });
     const ids: string[] = [];
     for (const row of res.rows) {
       const doc = row.doc as (NoteDoc & { _conflicts?: string[] }) | undefined;

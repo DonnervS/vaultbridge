@@ -60,6 +60,7 @@ export default class VaultbridgePlugin extends Plugin {
       this.syncHandle = startSync(this.localDb, remote, { live: true }, (s, info) => this.statusBar.setStatus(s, info));
       new Notice("Vaultbridge verbunden.");
     } catch (e) {
+      this.disconnect();
       this.statusBar.setStatus("error", String(e));
       new Notice(`Vaultbridge: Verbindung fehlgeschlagen: ${String(e)}`);
     }
@@ -72,6 +73,7 @@ export default class VaultbridgePlugin extends Plugin {
     this.bridge = null;
     void this.localDb?.close();
     this.localDb = null;
+    this.statusBar?.setInactive();
   }
 
   async loadSettings(): Promise<void> {
