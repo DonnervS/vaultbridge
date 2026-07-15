@@ -239,9 +239,11 @@ export default class VaultbridgePlugin extends Plugin {
 
   async openConflictView(): Promise<void> {
     const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)[0];
+    let leaf = workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)[0] ?? null;
     if (!leaf) {
-      leaf = workspace.getRightLeaf(false)!;
+      const right = workspace.getRightLeaf(false);
+      if (!right) { new Notice("Vaultbridge: kein Panel verfügbar."); return; }
+      leaf = right;
       await leaf.setViewState({ type: VIEW_TYPE_CONFLICTS, active: true });
     }
     workspace.revealLeaf(leaf);
