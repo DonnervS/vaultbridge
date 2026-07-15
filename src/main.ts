@@ -70,8 +70,17 @@ export default class VaultbridgePlugin extends Plugin {
 
       const remoteUrl = `${payload.couchUrl.replace(/\/$/, "")}/${encodeURIComponent(payload.db)}`;
       const remote = new PouchDB(remoteUrl, { auth: { username: payload.user, password: payload.pass } });
-      this.syncHandle = startSync(this.localDb, remote, { live: true }, (s, info) => this.statusBar.setStatus(s, info));
+      this.syncHandle = startSync(
+        this.localDb,
+        remote,
+        { live: true },
+        (s, info) => {
+          this.statusBar.setStatus(s, info);
+          if (s === "idle" || s === "paused") void this.refreshConflicts();
+        },
+      );
       new Notice("Vaultbridge verbunden.");
+      void this.refreshConflicts();
     } catch (e) {
       this.disconnect();
       this.statusBar.setStatus("error", String(e));
@@ -88,6 +97,23 @@ export default class VaultbridgePlugin extends Plugin {
     this.localDb = null;
     this.store = null;
     this.statusBar?.setInactive();
+  }
+
+  private async refreshConflicts(): Promise<void> {
+    if (!this.store) {
+      this.statusBar.setConflicts(0);
+      return;
+    }
+    try {
+      const ids = await this.store.listConflicts();
+      this.statusBar.setConflicts(ids.length);
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)) {
+        const view = leaf.view;
+        if (view instanceof ConflictListView) void view.render();
+      }
+    } catch {
+      /* Konfliktprüfung ist best-effort */
+    }
   }
 
   async openConflictView(): Promise<void> {

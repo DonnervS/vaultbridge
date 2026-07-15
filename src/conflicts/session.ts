@@ -1,4 +1,4 @@
-import { computeHunks, mergedText, wholeSide, Hunk } from "./diff";
+import { computeHunks, mergedText, Hunk } from "./diff";
 import { utf8 } from "../crypto/encoding";
 
 export interface ConflictInput {

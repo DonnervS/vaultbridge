@@ -100,7 +100,12 @@ export class VaultStore {
       return null;
     }
     if (!winning._conflicts || winning._conflicts.length === 0) return null;
-    const local = await decodeFile(this.keys, winning, (cid) => this.db.get<ChunkDoc>(cid));
+    let local: Awaited<ReturnType<typeof decodeFile>>;
+    try {
+      local = await decodeFile(this.keys, winning, (cid) => this.db.get<ChunkDoc>(cid));
+    } catch {
+      return null;
+    }
     const remotes: ConflictVersion[] = [];
     for (const rev of winning._conflicts) {
       const version = await this.readNoteRev(id, rev);
@@ -123,7 +128,7 @@ export class VaultStore {
     pruneRevs: string[],
   ): Promise<void> {
     const winning = await this.getRaw<NoteDoc>(id);
-    const { note, chunks } = await encodeFile(this.keys, path, mergedBytes, meta, this.chunkSize);
+    const { note, chunks } = await encodeFile(this.keys, path, mergedBytes, { ...meta, size: mergedBytes.length }, this.chunkSize);
     await this.writeChunks(chunks);
     if (winning) note._rev = winning._rev;
     await this.db.put(note);

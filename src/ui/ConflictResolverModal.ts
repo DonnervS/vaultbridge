@@ -24,6 +24,7 @@ export class ConflictResolverModal extends Modal {
       return;
     }
     contentEl.createEl("h3", { text: `Konflikt: ${conflict.path}` });
+    contentEl.createEl("p", { text: "Hinweis: „Aktuell“ ist die derzeit gültige Version, „Konflikt“ die abweichende. Wähle nach dem Inhalt, nicht nach dem Gerät." });
     const session = new ConflictSession({
       id: conflict.id,
       path: conflict.path,
@@ -39,8 +40,8 @@ export class ConflictResolverModal extends Modal {
     }
 
     const footer = contentEl.createDiv({ cls: "vb-conflict-footer" });
-    footer.createEl("button", { text: "Ganz lokal" }).onclick = () => this.applyWhole?.("local");
-    footer.createEl("button", { text: "Ganz remote" }).onclick = () => this.applyWhole?.("remote");
+    footer.createEl("button", { text: "Ganz Aktuell" }).onclick = () => this.applyWhole?.("local");
+    footer.createEl("button", { text: "Ganz Konflikt" }).onclick = () => this.applyWhole?.("remote");
     const save = footer.createEl("button", { text: "Zusammenführen & speichern" });
     save.addClass("mod-cta");
     save.onclick = async () => {
@@ -99,10 +100,10 @@ export class ConflictResolverModal extends Modal {
     root.createEl("p", { text: "Binärdatei — kein Textvergleich möglich. Version wählen:" });
     const cards = root.createDiv({ cls: "vb-binary" });
     const local = cards.createDiv({ cls: "vb-card vb-chosen" });
-    local.createEl("b", { text: "Lokal" });
+    local.createEl("b", { text: "Aktuell (gültig)" });
     local.createEl("div", { text: `${conflict.local.bytes.length} Bytes` });
     const remote = cards.createDiv({ cls: "vb-card" });
-    remote.createEl("b", { text: "Remote" });
+    remote.createEl("b", { text: "Konfliktversion" });
     remote.createEl("div", { text: `${conflict.remotes[0].bytes.length} Bytes` });
     local.onclick = () => { session.takeWhole("local"); local.addClass("vb-chosen"); remote.removeClass("vb-chosen"); };
     remote.onclick = () => { session.takeWhole("remote"); remote.addClass("vb-chosen"); local.removeClass("vb-chosen"); };
