@@ -49,6 +49,7 @@ export default class VaultbridgePlugin extends Plugin {
   private store: VaultStore | null = null;
   private pluginChanges = new Set<string>();
   private pluginReloadTimer: number | null = null;
+  private connectIntervals: number[] = [];
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -113,11 +114,6 @@ export default class VaultbridgePlugin extends Plugin {
       this.remote = remote;
 
       const mode = this.settings.syncMode;
-      const ctx = {
-        isMobile: Platform.isMobile,
-        onWifi: this.isOnWifi(),
-        wifiOnly: this.settings.wifiOnly,
-      };
       const onStatus = (s: SyncStatus, info?: string): void => {
         this.statusBar.setStatus(s, info);
         if (s === "idle" || s === "paused") {
@@ -125,17 +121,22 @@ export default class VaultbridgePlugin extends Plugin {
           void this.bridge?.reconcileHidden();
         }
       };
-      if (mode === "continuous" && shouldReplicateNow(mode, ctx)) {
+      if (mode === "continuous" && shouldReplicateNow(mode, this.currentCtx())) {
         this.syncHandle = startSync(this.localDb, remote, { live: true }, onStatus);
       } else if (mode === "interval") {
-        this.registerInterval(
+        const id = this.registerInterval(
           window.setInterval(() => {
-            if (shouldReplicateNow(mode, ctx)) void this.syncOnce();
+            if (shouldReplicateNow(mode, this.currentCtx())) void this.syncOnce();
           }, this.settings.intervalSeconds * 1000),
         );
+        this.connectIntervals.push(id);
       } else if (mode === "onOpenClose") {
-        void this.syncOnce();
-        this.registerEvent(this.app.workspace.on("quit", () => { void this.syncOnce(); }));
+        if (shouldReplicateNow(mode, this.currentCtx())) void this.syncOnce();
+        this.registerEvent(
+          this.app.workspace.on("quit", (tasks) => {
+            if (shouldReplicateNow(mode, this.currentCtx())) tasks.addPromise(this.syncOnce());
+          }),
+        );
       }
       // manual: nur der "Sync jetzt"-Befehl
 
@@ -162,7 +163,13 @@ export default class VaultbridgePlugin extends Plugin {
       window.clearTimeout(this.pluginReloadTimer);
       this.pluginReloadTimer = null;
     }
+    for (const id of this.connectIntervals) window.clearInterval(id);
+    this.connectIntervals = [];
     this.statusBar?.setInactive();
+  }
+
+  private currentCtx() {
+    return { isMobile: Platform.isMobile, onWifi: this.isOnWifi(), wifiOnly: this.settings.wifiOnly };
   }
 
   private onHiddenApplied(path: string): void {
