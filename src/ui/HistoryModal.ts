@@ -2,6 +2,7 @@ import { App, Modal, Notice } from "obsidian";
 import { VaultStore } from "../store/store";
 import { computeHunks } from "../conflicts/diff";
 import { utf8 } from "../crypto/encoding";
+import { FileMeta } from "../store/model";
 
 export class HistoryModal extends Modal {
   constructor(
@@ -28,8 +29,9 @@ export class HistoryModal extends Modal {
     const detail = contentEl.createDiv({ cls: "vb-history-detail" });
 
     revs.forEach((rev, i) => {
+      const date = rev.meta.mtime > 0 ? ` · ${new Date(rev.meta.mtime).toLocaleString("de-DE")}` : "";
       const item = list.createEl("button", {
-        text: i === 0 ? "Aktuelle Version" : `Version ${revs.length - i} (${rev.bytes.length} B)`,
+        text: i === 0 ? "Aktuelle Version" : `Version ${revs.length - i}${date} (${rev.bytes.length} B)`,
       });
       if (i === 0) item.addClass("mod-cta");
       item.onclick = () => this.showRevision(detail, current, rev, i === 0);
@@ -40,7 +42,7 @@ export class HistoryModal extends Modal {
   private showRevision(
     root: HTMLElement,
     current: Uint8Array,
-    rev: { rev: string; bytes: Uint8Array },
+    rev: { rev: string; bytes: Uint8Array; meta: FileMeta },
     isCurrent: boolean,
   ): void {
     root.empty();
@@ -48,17 +50,23 @@ export class HistoryModal extends Modal {
       root.createEl("p", { text: "Das ist die aktuelle Version." });
       return;
     }
-    // read-only Zweispalt-Diff: alt (links) vs. aktuell (rechts)
-    const hunks = computeHunks(utf8.decode(rev.bytes), utf8.decode(current));
-    const table = root.createDiv({ cls: "vb-diff" });
-    for (const h of hunks) {
-      const row = table.createDiv({ cls: "vb-diff-row" + (h.kind === "change" ? " vb-change" : "") });
-      if (h.kind === "equal") {
-        row.createDiv({ cls: "vb-col", text: h.lines.join("") });
-        row.createDiv({ cls: "vb-col", text: h.lines.join("") });
-      } else {
-        row.createDiv({ cls: "vb-col vb-local", text: h.local.join("") || "(leer)" });
-        row.createDiv({ cls: "vb-col vb-remote", text: h.remote.join("") || "(leer)" });
+    if (rev.meta.isBinary) {
+      root.createEl("p", {
+        text: `Binärdatei — kein Textvergleich möglich. Diese Version: ${rev.bytes.length} Bytes${rev.meta.mtime > 0 ? `, ${new Date(rev.meta.mtime).toLocaleString("de-DE")}` : ""}.`,
+      });
+    } else {
+      // read-only Zweispalt-Diff: alt (links) vs. aktuell (rechts)
+      const hunks = computeHunks(utf8.decode(rev.bytes), utf8.decode(current));
+      const table = root.createDiv({ cls: "vb-diff" });
+      for (const h of hunks) {
+        const row = table.createDiv({ cls: "vb-diff-row" + (h.kind === "change" ? " vb-change" : "") });
+        if (h.kind === "equal") {
+          row.createDiv({ cls: "vb-col", text: h.lines.join("") });
+          row.createDiv({ cls: "vb-col", text: h.lines.join("") });
+        } else {
+          row.createDiv({ cls: "vb-col vb-local", text: h.local.join("") || "(leer)" });
+          row.createDiv({ cls: "vb-col vb-remote", text: h.remote.join("") || "(leer)" });
+        }
       }
     }
     const restore = root.createEl("button", { text: "Diese Version wiederherstellen" });
