@@ -587,13 +587,13 @@ export class ConflictResolverModal extends Modal {
     for (const hunk of session.hunks) {
       if (hunk.kind === "equal") {
         const row = table.createDiv({ cls: "vb-diff-row vb-equal" });
-        row.createDiv({ cls: "vb-col", text: hunk.lines.join("\n") });
-        row.createDiv({ cls: "vb-col", text: hunk.lines.join("\n") });
+        row.createDiv({ cls: "vb-col", text: hunk.lines.join("") });
+        row.createDiv({ cls: "vb-col", text: hunk.lines.join("") });
       } else {
         const idx = changeIdx++;
         const row = table.createDiv({ cls: "vb-diff-row vb-change" });
-        const left = row.createDiv({ cls: "vb-col vb-local", text: hunk.local.join("\n") || "(leer)" });
-        const right = row.createDiv({ cls: "vb-col vb-remote", text: hunk.remote.join("\n") || "(leer)" });
+        const left = row.createDiv({ cls: "vb-col vb-local", text: hunk.local.join("") || "(leer)" });
+        const right = row.createDiv({ cls: "vb-col vb-remote", text: hunk.remote.join("") || "(leer)" });
         const mark = (chosen: "local" | "remote") => {
           left.toggleClass("vb-chosen", chosen === "local");
           right.toggleClass("vb-chosen", chosen === "remote");
