@@ -123,23 +123,20 @@ export class VaultBridge {
           if (currentHash === targetHash) { this.updateKnown(note.path, targetHash); return; }
           const knownHash = this.getKnown().get(note.path);
           if (knownHash === undefined || currentHash !== knownHash) {
-            // Platte trägt eine noch nicht hochgeladene lokale Änderung -> als Revision
-            // sichern (wird zum Konflikt gegen die eingehende Version, M3 löst auf),
-            // Platte NICHT überschreiben.
-            await this.store.putFile(note.path, current, {
-              mtime: 0, ctime: 0, size: current.length, mime: "",
-              isBinary: !/\.(md|txt|json|css|ya?ml|js)$/i.test(note.path),
-            });
-            this.updateKnown(note.path, currentHash);
-            return;
+            // Konkurrierende Änderung: die lokale (noch nicht synchronisierte) Version
+            // in eine Sidecar-Datei sichern, damit sie nicht verloren geht; danach
+            // gewinnt die Remote-Version (konsistent über alle Geräte).
+            try {
+              await adapter.writeBinary(`${note.path}.vaultbridge-konflikt`, current.slice().buffer as ArrayBuffer);
+              new Notice(`Vaultbridge: konkurrierende Änderung an ${note.path}. Deine lokale Version wurde als ${note.path}.vaultbridge-konflikt gesichert.`);
+            } catch { /* Sidecar ist best-effort */ }
           }
-          // knownHash === currentHash: Platte == letzter Sync, nur Remote hat sich geändert -> sicher überschreiben
         }
         this.guard.markApplied(note.path, targetHash);
         await this.ensureParentAdapter(note.path);
         await adapter.writeBinary(note.path, note.bytes.slice().buffer as ArrayBuffer);
-        this.onApplied?.(note.path);
         this.updateKnown(note.path, targetHash);
+        this.onApplied?.(note.path);
         return;
       }
 
@@ -243,12 +240,25 @@ export class VaultBridge {
         }
         const plan = planHiddenSync(local, known, store);
         for (const path of plan.uploads) {
-          const bytes = new Uint8Array(await adapter.readBinary(path));
+          let bytes: Uint8Array;
+          try {
+            bytes = new Uint8Array(await adapter.readBinary(path));
+          } catch {
+            continue; // nicht lesbar -> diese Runde überspringen
+          }
+          const storeHash = store.get(path);
+          const knownHash = knownRaw.get(path);
+          if (storeHash !== undefined && knownHash !== undefined && storeHash !== knownHash) {
+            // lokal UND remote seit letztem Sync geändert -> lokale Version sichern,
+            // Upload überspringen (applyRemote hat/übernimmt die Remote-Version).
+            try {
+              await adapter.writeBinary(`${path}.vaultbridge-konflikt`, bytes.slice().buffer as ArrayBuffer);
+              new Notice(`Vaultbridge: konkurrierende Änderung an ${path}. Lokale Version gesichert.`);
+            } catch { /* best-effort */ }
+            continue;
+          }
           await this.store.putFile(path, bytes, {
-            mtime: 0,
-            ctime: 0,
-            size: bytes.length,
-            mime: "",
+            mtime: 0, ctime: 0, size: bytes.length, mime: "",
             isBinary: !/\.(md|txt|json|css|ya?ml|js)$/i.test(path),
           });
         }

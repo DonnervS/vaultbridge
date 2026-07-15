@@ -5,7 +5,7 @@ export interface SyncRules {
 }
 
 // Nie synchronisieren (nicht abschaltbar): Vaultbridge' eigenes Verzeichnis.
-const HARD_EXCLUDE = [".obsidian/plugins/vaultbridge/**"];
+const HARD_EXCLUDE = [".obsidian/plugins/vaultbridge/**", "*.vaultbridge-konflikt", "**/*.vaultbridge-konflikt"];
 
 export const DEFAULT_RULES: SyncRules = {
   syncHidden: true,

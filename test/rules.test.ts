@@ -37,4 +37,9 @@ describe("rules", () => {
     expect(shouldSync(".obsidian/plugins/vaultbridge/main.js", DEFAULT_RULES)).toBe(false);
     expect(shouldSync(".obsidian/workspace.json", DEFAULT_RULES)).toBe(false);
   });
+  it("Konflikt-Sidecar-Dateien werden nie synchronisiert", () => {
+    const permissive = { syncHidden: true, include: [".claude/**"], exclude: [] };
+    expect(shouldSync(".claude/x.md.vaultbridge-konflikt", permissive)).toBe(false);
+    expect(shouldSync("root.vaultbridge-konflikt", permissive)).toBe(false);
+  });
 });
