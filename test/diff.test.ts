@@ -31,4 +31,17 @@ describe("diff-Modell", () => {
     expect(mergedText(hunks, { 0: "remote" })).toBe("a\nb\nc");
     expect(mergedText(hunks, { 0: "local" })).toBe("a\nc");
   });
+
+  it("erhält ein abschließendes \\n (kein Datenverlust)", () => {
+    expect(wholeSide(computeHunks("a\nb\n", "a\nb\n"), "local")).toBe("a\nb\n");
+    const hunks = computeHunks("a\nb\n", "a\nB2\n");
+    expect(mergedText(hunks, {})).toBe("a\nb\n"); // lokal behält das Abschluss-\n
+    expect(mergedText(hunks, { 0: "remote" })).toBe("a\nB2\n");
+  });
+
+  it("mischt einen mehrzeiligen change-Hunk korrekt", () => {
+    const hunks = computeHunks("x\na\nb\ny", "x\nc\nd\ne\ny");
+    expect(mergedText(hunks, { 0: "local" })).toBe("x\na\nb\ny");
+    expect(mergedText(hunks, { 0: "remote" })).toBe("x\nc\nd\ne\ny");
+  });
 });

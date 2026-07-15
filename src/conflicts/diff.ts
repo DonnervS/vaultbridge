@@ -6,9 +6,9 @@ export type Hunk =
 
 function toLines(value: string): string[] {
   if (value === "") return [];
-  const lines = value.split("\n");
-  if (lines[lines.length - 1] === "") lines.pop(); // Artefakt eines abschließenden \n
-  return lines;
+  // Zeilen INKLUSIVE ihres abschließenden \n behalten, damit die Rekonstruktion
+  // (join("")) byte-exakt ist und ein Datei-Abschluss-\n nicht verloren geht.
+  return value.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 }
 
 export function computeHunks(localText: string, remoteText: string): Hunk[] {
@@ -53,14 +53,14 @@ export function mergedText(
       changeIdx++;
     }
   }
-  return out.join("\n");
+  return out.join("");
 }
 
 export function wholeSide(hunks: Hunk[], side: "local" | "remote"): string {
-  const out: string[] = [];
+  const decisions: Record<number, "local" | "remote"> = {};
+  let i = 0;
   for (const h of hunks) {
-    if (h.kind === "equal") out.push(...h.lines);
-    else out.push(...(side === "local" ? h.local : h.remote));
+    if (h.kind === "change") decisions[i++] = side;
   }
-  return out.join("\n");
+  return mergedText(hunks, decisions);
 }
