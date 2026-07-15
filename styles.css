@@ -1,1 +1,11 @@
 /* Vaultbridge – Styles folgen in späteren Meilensteinen (Diff-View etc.) */
+
+.vb-diff-row { display: flex; gap: 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.vb-col { flex: 1; white-space: pre-wrap; padding: 4px; font-family: var(--font-monospace); }
+.vb-change .vb-local { background: rgba(255,0,0,0.08); }
+.vb-change .vb-remote { background: rgba(0,128,0,0.08); }
+.vb-col.vb-chosen { outline: 2px solid var(--interactive-accent); }
+.vb-conflict-footer { display: flex; gap: 8px; margin-top: 12px; }
+.vb-binary { display: flex; gap: 12px; }
+.vb-card { border: 1px solid var(--background-modifier-border); padding: 12px; cursor: pointer; border-radius: 6px; }
+.vb-card.vb-chosen { outline: 2px solid var(--interactive-accent); }

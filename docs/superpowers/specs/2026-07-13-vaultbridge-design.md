@@ -239,9 +239,10 @@ CouchDB/PouchDB behalten konkurrierende Revisionen als `_conflicts`. Das `confli
 ### Darstellung
 
 - Eigene **Merge-View** (Obsidian `ItemView`), pro Konflikt-Datei geöffnet.
-- Beide Revisionen werden **entschlüsselt** und mit **CodeMirror Merge** (`@codemirror/merge`, in Obsidian vorhanden) **zweispaltig** gegenübergestellt: links lokal (Gewinner-Rev), rechts remote (Konflikt-Rev).
-- Pro Änderungsblock (Hunk): **„← übernehmen"** / **„→ übernehmen"**. Zusätzlich Kopfleiste: **„ganze Datei lokal"** / **„ganze Datei remote"** / **„beide zusammenführen (aktuelles Ergebnis)"**.
-- **Binärdateien** (Bild/PDF/…): kein Textdiff → Karten „lokal behalten" / „remote behalten" mit Metadaten (Größe, mtime) und, wo möglich, Bildvorschau.
+- Beide Revisionen werden **entschlüsselt** und über einen **eigenen zweispaltigen HTML-Renderer** (Zeilen-Hunks via `diff`/jsdiff — **nicht** CodeMirror, siehe Entscheidungslog #6 und die M3-Notiz unten) gegenübergestellt: links die **aktuell gültige** Version (PouchDB-Gewinner-Rev), rechts die **Konfliktversion** (verlierende Rev).
+- **Wichtige Semantik (M3):** „aktuell/Gewinner" ist auf allen Replikas dieselbe Revision, aber bei Gleich-Generations-Konflikten wählt PouchDB den Gewinner über eine **zufällige** Rev-id — die linke Spalte ist also **nicht zwingend die des lokalen Geräts**. Labels sind daher inhaltsbezogen („Aktuell"/„Konflikt"), nicht gerätebezogen, damit niemand versehentlich die eigene Änderung verwirft.
+- Pro Änderungsblock (Hunk): **„← übernehmen"** / **„übernehmen →"**. Zusätzlich Fußleiste: **„Ganz Aktuell"** / **„Ganz Konflikt"** / **„Zusammenführen & speichern"**.
+- **Binärdateien** (Bild/PDF/…): kein Textdiff → Karten „Aktuell (gültig)" / „Konfliktversion" mit Metadaten (Größe; mtime/Bildvorschau später).
 
 ### Auflösung
 
@@ -252,7 +253,7 @@ CouchDB/PouchDB behalten konkurrierende Revisionen als `_conflicts`. Das `confli
 
 ### Trennung Logik/Darstellung
 
-Die Auflöse-Logik (Eingabe: zwei Klartext-Versionen + Hunk-Entscheidungen → Ausgabe: finaler Text; plus Revisions-Bereinigung) liegt getrennt von der CodeMirror-Darstellung → headless unit-testbar.
+Die Auflöse-Logik (Eingabe: zwei Klartext-Versionen + Hunk-Entscheidungen → Ausgabe: finaler Text; plus Revisions-Bereinigung) liegt in `conflicts/diff.ts` + `conflicts/session.ts` getrennt vom HTML-Renderer → headless unit-testbar (in M3 umgesetzt und getestet).
 
 ---
 
@@ -373,7 +374,7 @@ vaultbridge/
 
 - **Passphrase-Rotation** ist die komplexeste v1-Komponente (Massen-Reencrypt + Epochen-Koordination über Geräte). Eigene, gründliche Tests; als abbrechbarer/fortsetzbarer Batch gebaut.
 - **Mobile-Einschränkungen** (Hintergrund-Sync, IndexedDB-Quota) müssen früh am echten Gerät verifiziert werden.
-- **CodeMirror-Merge-Integration** in eine eigene View — API-Details früh prototypisieren.
+- ~~CodeMirror-Merge-Integration~~ — in M3 durch einen eigenen HTML-Renderer + `diff`/jsdiff ersetzt (kein Bundling-Risiko, mobil identisch, Auflöse-Logik headless testbar). Risiko damit erledigt.
 - **CouchDB-CORS** ist die häufigste Onboarding-Fehlerquelle → Selbsttest muss das explizit prüfen und melden.
 - **Bundle-Größe** (PouchDB) — akzeptiert zugunsten Zuverlässigkeit.
 
@@ -388,5 +389,5 @@ vaultbridge/
 | 3 | Passphrase-Übergabe | **Beides wählbar** (eingebettet/getrennt) | Admin entscheidet Komfort vs. Sicherheit pro String. |
 | 4 | v1-Umfang | **Voller Funktionsumfang** inkl. Verlauf + Rotation | Nutzerwunsch; Rotation als höchstes Risiko markiert. |
 | 5 | Mobile | **iOS + Android** in v1 | `isDesktopOnly: false`, nur Web-APIs. |
-| 6 | Diff-UI | **CodeMirror Merge**, Logik von Darstellung getrennt | Fertige Hunk-Übernahme, testbare Auflöse-Logik. |
+| 6 | Diff-UI | **Eigener HTML-Renderer + `diff`/jsdiff** (M3-Revision; ursprünglich CodeMirror Merge geplant), Logik von Darstellung getrennt | Kein Bundling-Risiko, mobil identisch, Auflöse-Logik headless testbar. Vom Nutzer in M3 bestätigt. |
 | 7 | Name/Repo | **Vaultbridge**, MIT, ohne eigene Daten | Community-konform, eigenständige Marke. |
