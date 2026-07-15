@@ -9,15 +9,26 @@ import { VaultStore } from "./store/store";
 import { startSync, SyncHandle } from "./store/replication";
 import { EchoGuard } from "./vault/applyChange";
 import { VaultBridge } from "./vault/bridge";
+import { DEFAULT_RULES, SyncRules } from "./vault/rules";
 import { promptPassphrase } from "./ui/PassphrasePromptModal";
 import { ConflictListView, VIEW_TYPE_CONFLICTS } from "./ui/ConflictListView";
 
 export interface VaultbridgeSettings {
   setupString: string;
   deviceName: string;
+  rules: SyncRules;
+  // Zuletzt bekannter Stand versteckter Dateien (Pfad -> Hash) für den
+  // Drei-Wege-Abgleich in reconcileHidden(). Lebt in den Plugin-eigenen
+  // Daten (data.json), NICHT im synchronisierten Vault-Bereich.
+  known: Record<string, string>;
 }
 
-const DEFAULT_SETTINGS: VaultbridgeSettings = { setupString: "", deviceName: "" };
+const DEFAULT_SETTINGS: VaultbridgeSettings = {
+  setupString: "",
+  deviceName: "",
+  rules: DEFAULT_RULES,
+  known: {},
+};
 
 export default class VaultbridgePlugin extends Plugin {
   settings: VaultbridgeSettings = { ...DEFAULT_SETTINGS };
@@ -45,6 +56,10 @@ export default class VaultbridgePlugin extends Plugin {
       name: "Vaultbridge: Konflikte anzeigen",
       callback: () => this.openConflictView(),
     });
+
+    // Regelmäßiger Abgleich versteckter Dateien (Dotfiles/.claude/Plugins):
+    // diese lösen keine indizierten Vault-Events aus, daher periodisches Polling.
+    this.registerInterval(window.setInterval(() => void this.bridge?.reconcileHidden(), 30000));
   }
 
   async onunload(): Promise<void> {
@@ -65,7 +80,14 @@ export default class VaultbridgePlugin extends Plugin {
       const store = new VaultStore(this.localDb, keys, payload.opts.chunkSize);
       this.store = store;
       const guard = new EchoGuard();
-      this.bridge = new VaultBridge(this.app, store, guard);
+      this.bridge = new VaultBridge(
+        this.app,
+        store,
+        guard,
+        this.settings.rules ?? DEFAULT_RULES,
+        () => new Map(Object.entries(this.settings.known ?? {})),
+        (m) => { this.settings.known = Object.fromEntries(m); void this.saveSettings(); },
+      );
       this.bridge.start();
 
       const remoteUrl = `${payload.couchUrl.replace(/\/$/, "")}/${encodeURIComponent(payload.db)}`;
@@ -76,11 +98,15 @@ export default class VaultbridgePlugin extends Plugin {
         { live: true },
         (s, info) => {
           this.statusBar.setStatus(s, info);
-          if (s === "idle" || s === "paused") void this.refreshConflicts();
+          if (s === "idle" || s === "paused") {
+            void this.refreshConflicts();
+            void this.bridge?.reconcileHidden();
+          }
         },
       );
       new Notice("Vaultbridge verbunden.");
       void this.refreshConflicts();
+      void this.bridge.reconcileHidden();
     } catch (e) {
       this.disconnect();
       this.statusBar.setStatus("error", String(e));
