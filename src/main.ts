@@ -26,7 +26,7 @@ export interface VaultbridgeSettings {
 const DEFAULT_SETTINGS: VaultbridgeSettings = {
   setupString: "",
   deviceName: "",
-  rules: DEFAULT_RULES,
+  rules: { ...DEFAULT_RULES, include: [...DEFAULT_RULES.include], exclude: [...DEFAULT_RULES.exclude] },
   known: {},
 };
 

@@ -19,6 +19,7 @@ const DELETE_SENTINEL = "__vaultbridge_deleted__";
 export class VaultBridge {
   private readonly handlers: Array<() => void> = [];
   private incoming: { cancel(): void } | null = null;
+  private reconcileRunning = false;
 
   constructor(
     private readonly app: App,
@@ -192,34 +193,48 @@ export class VaultBridge {
    * rohen Dateisystem-Adapter statt der Vault-API.
    */
   async reconcileHidden(): Promise<void> {
+    if (this.reconcileRunning) return;
+    this.reconcileRunning = true;
     try {
-      const adapter = this.app.vault.adapter;
-      const allPaths = await listAllFiles(adapter);
-      const local = new Map<string, string>();
-      for (const path of allPaths) {
-        if (!isHidden(path) || !shouldSync(path, this.rules)) continue;
-        const bytes = new Uint8Array(await adapter.readBinary(path));
-        local.set(path, await contentHash(bytes));
+      try {
+        const adapter = this.app.vault.adapter;
+        const allPaths = await listAllFiles(adapter);
+        const local = new Map<string, string>();
+        for (const path of allPaths) {
+          if (!isHidden(path) || !shouldSync(path, this.rules)) continue;
+          try {
+            const bytes = new Uint8Array(await adapter.readBinary(path));
+            local.set(path, await contentHash(bytes));
+          } catch {
+            /* eine kaputte/verschwundene Datei darf den ganzen Lauf nicht abbrechen */
+          }
+        }
+        const storeAll = await this.store.pathHashes();
+        const store = new Map<string, string>();
+        for (const [p, h] of storeAll) if (isHidden(p) && shouldSync(p, this.rules)) store.set(p, h);
+        const knownRaw = this.getKnown();
+        const known = new Map<string, string>();
+        for (const [p, h] of knownRaw) {
+          if (isHidden(p) && shouldSync(p, this.rules)) known.set(p, h);
+        }
+        const plan = planHiddenSync(local, known, store);
+        for (const path of plan.uploads) {
+          const bytes = new Uint8Array(await adapter.readBinary(path));
+          await this.store.putFile(path, bytes, {
+            mtime: 0,
+            ctime: 0,
+            size: bytes.length,
+            mime: "",
+            isBinary: !/\.(md|txt|json|css|ya?ml|js)$/i.test(path),
+          });
+        }
+        for (const path of plan.deleteRemotes) await this.store.deleteFile(path);
+        this.setKnown(new Map(local)); // Baseline = aktueller Plattenstand
+      } catch (e) {
+        new Notice(`Vaultbridge: Hidden-Abgleich fehlgeschlagen: ${String(e)}`);
       }
-      const storeAll = await this.store.pathHashes();
-      const store = new Map<string, string>();
-      for (const [p, h] of storeAll) if (isHidden(p) && shouldSync(p, this.rules)) store.set(p, h);
-      const known = this.getKnown();
-      const plan = planHiddenSync(local, known, store);
-      for (const path of plan.uploads) {
-        const bytes = new Uint8Array(await adapter.readBinary(path));
-        await this.store.putFile(path, bytes, {
-          mtime: 0,
-          ctime: 0,
-          size: bytes.length,
-          mime: "",
-          isBinary: !/\.(md|txt|json|css|ya?ml|js)$/i.test(path),
-        });
-      }
-      for (const path of plan.deleteRemotes) await this.store.deleteFile(path);
-      this.setKnown(new Map(local)); // Baseline = aktueller Plattenstand
-    } catch (e) {
-      new Notice(`Vaultbridge: Hidden-Abgleich fehlgeschlagen: ${String(e)}`);
+    } finally {
+      this.reconcileRunning = false;
     }
   }
 
