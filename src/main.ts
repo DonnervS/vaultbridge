@@ -51,6 +51,7 @@ export default class VaultbridgePlugin extends Plugin {
   private pluginChanges = new Set<string>();
   private pluginReloadTimer: number | null = null;
   private connectIntervals: number[] = [];
+  private knownSaveTimer: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -110,7 +111,11 @@ export default class VaultbridgePlugin extends Plugin {
         guard,
         this.settings.rules ?? DEFAULT_RULES,
         () => new Map(Object.entries(this.settings.known ?? {})),
-        (m) => { this.settings.known = Object.fromEntries(m); void this.saveSettings(); },
+        (m) => {
+          this.settings.known = Object.fromEntries(m);
+          if (this.knownSaveTimer !== null) window.clearTimeout(this.knownSaveTimer);
+          this.knownSaveTimer = window.setTimeout(() => { this.knownSaveTimer = null; void this.saveSettings(); }, 2000);
+        },
         (p) => this.onHiddenApplied(p),
       );
       this.bridge.start();
@@ -120,6 +125,8 @@ export default class VaultbridgePlugin extends Plugin {
       this.remote = remote;
 
       const mode = this.settings.syncMode;
+      const effectiveMode =
+        mode === "continuous" && Platform.isMobile && this.settings.wifiOnly ? "interval" : mode;
       const onStatus = (s: SyncStatus, info?: string): void => {
         this.statusBar.setStatus(s, info);
         if (s === "idle" || s === "paused") {
@@ -127,20 +134,20 @@ export default class VaultbridgePlugin extends Plugin {
           void this.bridge?.reconcileHidden();
         }
       };
-      if (mode === "continuous" && shouldReplicateNow(mode, this.currentCtx())) {
+      if (effectiveMode === "continuous" && shouldReplicateNow(effectiveMode, this.currentCtx())) {
         this.syncHandle = startSync(this.localDb, remote, { live: true }, onStatus);
-      } else if (mode === "interval") {
+      } else if (effectiveMode === "interval") {
         const id = this.registerInterval(
           window.setInterval(() => {
-            if (shouldReplicateNow(mode, this.currentCtx())) void this.syncOnce();
+            if (shouldReplicateNow(effectiveMode, this.currentCtx())) void this.syncOnce();
           }, this.settings.intervalSeconds * 1000),
         );
         this.connectIntervals.push(id);
-      } else if (mode === "onOpenClose") {
-        if (shouldReplicateNow(mode, this.currentCtx())) void this.syncOnce();
+      } else if (effectiveMode === "onOpenClose") {
+        if (shouldReplicateNow(effectiveMode, this.currentCtx())) void this.syncOnce();
         this.registerEvent(
           this.app.workspace.on("quit", (tasks) => {
-            if (shouldReplicateNow(mode, this.currentCtx())) tasks.addPromise(this.syncOnce());
+            if (shouldReplicateNow(effectiveMode, this.currentCtx())) tasks.addPromise(this.syncOnce());
           }),
         );
       }
@@ -168,6 +175,11 @@ export default class VaultbridgePlugin extends Plugin {
     if (this.pluginReloadTimer !== null) {
       window.clearTimeout(this.pluginReloadTimer);
       this.pluginReloadTimer = null;
+    }
+    if (this.knownSaveTimer !== null) {
+      window.clearTimeout(this.knownSaveTimer);
+      this.knownSaveTimer = null;
+      void this.saveSettings();
     }
     for (const id of this.connectIntervals) window.clearInterval(id);
     this.connectIntervals = [];

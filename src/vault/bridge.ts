@@ -20,6 +20,7 @@ export class VaultBridge {
   private readonly handlers: Array<() => void> = [];
   private incoming: { cancel(): void } | null = null;
   private reconcileRunning = false;
+  private pendingHiddenDeletes = new Set<string>();
 
   constructor(
     private readonly app: App,
@@ -118,7 +119,21 @@ export class VaultBridge {
         const targetHash = await contentHash(note.bytes);
         if (exists) {
           const current = new Uint8Array(await adapter.readBinary(note.path));
-          if ((await contentHash(current)) === targetHash) { this.updateKnown(note.path, targetHash); return; }
+          const currentHash = await contentHash(current);
+          if (currentHash === targetHash) { this.updateKnown(note.path, targetHash); return; }
+          const knownHash = this.getKnown().get(note.path);
+          if (knownHash === undefined || currentHash !== knownHash) {
+            // Platte trägt eine noch nicht hochgeladene lokale Änderung -> als Revision
+            // sichern (wird zum Konflikt gegen die eingehende Version, M3 löst auf),
+            // Platte NICHT überschreiben.
+            await this.store.putFile(note.path, current, {
+              mtime: 0, ctime: 0, size: current.length, mime: "",
+              isBinary: !/\.(md|txt|json|css|ya?ml|js)$/i.test(note.path),
+            });
+            this.updateKnown(note.path, currentHash);
+            return;
+          }
+          // knownHash === currentHash: Platte == letzter Sync, nur Remote hat sich geändert -> sicher überschreiben
         }
         this.guard.markApplied(note.path, targetHash);
         await this.ensureParentAdapter(note.path);
@@ -237,9 +252,22 @@ export class VaultBridge {
             isBinary: !/\.(md|txt|json|css|ya?ml|js)$/i.test(path),
           });
         }
-        for (const path of plan.deleteRemotes) await this.store.deleteFile(path);
+        for (const path of plan.deleteRemotes) {
+          if (this.pendingHiddenDeletes.has(path)) {
+            await this.store.deleteFile(path);
+            this.pendingHiddenDeletes.delete(path);
+          } else {
+            this.pendingHiddenDeletes.add(path); // erst in der nächsten Runde löschen
+          }
+        }
+        // Pfade, die wieder aufgetaucht sind, aus der Warteschlange nehmen:
+        for (const p of [...this.pendingHiddenDeletes]) if (local.has(p)) this.pendingHiddenDeletes.delete(p);
         const newKnown = new Map(local);
         for (const p of errored) {
+          const prev = knownRaw.get(p);
+          if (prev !== undefined) newKnown.set(p, prev);
+        }
+        for (const p of this.pendingHiddenDeletes) {
           const prev = knownRaw.get(p);
           if (prev !== undefined) newKnown.set(p, prev);
         }
