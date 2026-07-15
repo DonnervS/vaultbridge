@@ -1,6 +1,7 @@
 import { VaultKeys, pathId } from "../crypto/crypto";
 import { encodeFile, decodeFile } from "./transform";
 import { NoteDoc, ChunkDoc, FileMeta } from "./model";
+import { contentHash } from "../vault/applyChange";
 
 export interface ConflictVersion {
   rev: string;
@@ -144,6 +145,18 @@ export class VaultStore {
       }
     }
     if (pruneError) throw pruneError;
+  }
+
+  async pathHashes(): Promise<Map<string, string>> {
+    const res = await this.db.allDocs({ include_docs: true, startkey: "n:", endkey: "n:￰" });
+    const map = new Map<string, string>();
+    for (const row of res.rows) {
+      const note = row.doc as (NoteDoc & { _rev: string }) | undefined;
+      if (!note || note.type !== "note" || note.deleted) continue;
+      const decoded = await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
+      map.set(decoded.path, await contentHash(decoded.bytes));
+    }
+    return map;
   }
 
   subscribe(onNoteChange: (id: string) => void): { cancel(): void } {
