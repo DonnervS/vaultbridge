@@ -282,9 +282,11 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   private async openHistory(path: string): Promise<void> {
-    if (!this.store) { new Notice("Vaultbridge: nicht verbunden."); return; }
-    const id = await pathId(this.keysForHistory!.idKey, path);
-    new HistoryModal(this.store, id, path, () => {}, this.app).open();
+    const store = this.store;
+    const keys = this.keysForHistory;
+    if (!store || !keys) { new Notice("Vaultbridge: nicht verbunden."); return; }
+    const id = await pathId(keys.idKey, path);
+    new HistoryModal(store, id, path, () => {}, this.app).open();
   }
 
   async loadSettings(): Promise<void> {
