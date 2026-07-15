@@ -2,6 +2,12 @@ import { VaultKeys, pathId } from "../crypto/crypto";
 import { encodeFile, decodeFile } from "./transform";
 import { NoteDoc, ChunkDoc, FileMeta } from "./model";
 
+export interface ConflictVersion {
+  rev: string;
+  bytes: Uint8Array;
+  meta: FileMeta;
+}
+
 export class VaultStore {
   constructor(
     private readonly db: PouchDB.Database,
@@ -13,21 +19,7 @@ export class VaultStore {
     const { note, chunks } = await encodeFile(this.keys, path, bytes, meta, this.chunkSize);
 
     // Chunks: nur neue schreiben (Dedup, Vermeidung unnötiger Revisions).
-    for (const chunk of chunks) {
-      const exists = await this.exists(chunk._id);
-      if (!exists) {
-        try {
-          await this.db.put(chunk);
-        } catch (e) {
-          // Ein 409 bedeutet: ein paralleler Schreibvorgang hat denselben
-          // (inhaltsgleichen) Chunk bereits angelegt — genau das gewünschte
-          // Dedup. Andere Fehler weiterreichen.
-          const status = (e as { status?: number }).status;
-          const name = (e as { name?: string }).name;
-          if (status !== 409 && name !== "conflict") throw e;
-        }
-      }
-    }
+    await this.writeChunks(chunks);
 
     // Note: bestehende Revision übernehmen, damit ein Update kein Konflikt wird.
     const prev = await this.getRaw<NoteDoc>(note._id);
@@ -86,21 +78,20 @@ export class VaultStore {
     id: string,
     rev: string,
   ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta } | null> {
-    let note: NoteDoc;
     try {
-      note = await this.db.get<NoteDoc>(id, { rev });
+      const note = await this.db.get<NoteDoc>(id, { rev });
+      return await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
     } catch {
       return null;
     }
-    return decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
   }
 
   async getConflict(id: string): Promise<{
     id: string;
     path: string;
     isBinary: boolean;
-    local: { rev: string; bytes: Uint8Array; meta: FileMeta };
-    remotes: { rev: string; bytes: Uint8Array; meta: FileMeta }[];
+    local: ConflictVersion;
+    remotes: ConflictVersion[];
   } | null> {
     let winning: NoteDoc & { _rev: string; _conflicts?: string[] };
     try {
@@ -110,7 +101,7 @@ export class VaultStore {
     }
     if (!winning._conflicts || winning._conflicts.length === 0) return null;
     const local = await decodeFile(this.keys, winning, (cid) => this.db.get<ChunkDoc>(cid));
-    const remotes: { rev: string; bytes: Uint8Array; meta: FileMeta }[] = [];
+    const remotes: ConflictVersion[] = [];
     for (const rev of winning._conflicts) {
       const version = await this.readNoteRev(id, rev);
       if (version) remotes.push({ rev, bytes: version.bytes, meta: version.meta });
@@ -133,22 +124,21 @@ export class VaultStore {
   ): Promise<void> {
     const winning = await this.getRaw<NoteDoc>(id);
     const { note, chunks } = await encodeFile(this.keys, path, mergedBytes, meta, this.chunkSize);
-    for (const chunk of chunks) {
-      if (!(await this.exists(chunk._id))) {
-        try {
-          await this.db.put(chunk);
-        } catch (e) {
-          const status = (e as { status?: number }).status;
-          const name = (e as { name?: string }).name;
-          if (status !== 409 && name !== "conflict") throw e;
-        }
-      }
-    }
+    await this.writeChunks(chunks);
     if (winning) note._rev = winning._rev;
     await this.db.put(note);
+    let pruneError: unknown = null;
     for (const rev of pruneRevs) {
-      await this.db.remove(id, rev);
+      try {
+        await this.db.remove(id, rev);
+      } catch (e) {
+        const status = (e as { status?: number }).status;
+        const name = (e as { name?: string }).name;
+        if (status === 404 || name === "not_found") continue; // bereits entfernt -> ok
+        pruneError = pruneError ?? e;
+      }
     }
+    if (pruneError) throw pruneError;
   }
 
   subscribe(onNoteChange: (id: string) => void): { cancel(): void } {
@@ -157,6 +147,23 @@ export class VaultStore {
       if (change.id.startsWith("n:")) onNoteChange(change.id);
     });
     return { cancel: () => feed.cancel() };
+  }
+
+  private async writeChunks(chunks: ChunkDoc[]): Promise<void> {
+    for (const chunk of chunks) {
+      if (!(await this.exists(chunk._id))) {
+        try {
+          await this.db.put(chunk);
+        } catch (e) {
+          // Ein 409 bedeutet: ein paralleler Schreibvorgang hat denselben
+          // (inhaltsgleichen) Chunk bereits angelegt — genau das gewünschte
+          // Dedup. Andere Fehler weiterreichen.
+          const status = (e as { status?: number }).status;
+          const name = (e as { name?: string }).name;
+          if (status !== 409 && name !== "conflict") throw e;
+        }
+      }
+    }
   }
 
   private async exists(id: string): Promise<boolean> {
