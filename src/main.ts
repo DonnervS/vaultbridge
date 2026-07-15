@@ -14,6 +14,7 @@ import { promptPassphrase } from "./ui/PassphrasePromptModal";
 import { ConflictListView, VIEW_TYPE_CONFLICTS } from "./ui/ConflictListView";
 import { SyncMode, shouldReplicateNow } from "./store/syncModes";
 import { planPluginReload } from "./plugins/pluginSync";
+import { GeneratorModal } from "./ui/GeneratorModal";
 
 export interface VaultbridgeSettings {
   setupString: string;
@@ -73,6 +74,11 @@ export default class VaultbridgePlugin extends Plugin {
       id: "vaultbridge-sync-now",
       name: "Vaultbridge: Jetzt synchronisieren",
       callback: () => void this.syncOnce(),
+    });
+    this.addCommand({
+      id: "vaultbridge-generate-setup",
+      name: "Vaultbridge: Setup-String erzeugen",
+      callback: () => new GeneratorModal(this.app).open(),
     });
 
     // Regelmäßiger Abgleich versteckter Dateien (Dotfiles/.claude/Plugins):

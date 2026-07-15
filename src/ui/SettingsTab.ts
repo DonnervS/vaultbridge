@@ -3,6 +3,7 @@ import type VaultbridgePlugin from "../main";
 import { decodeSetup } from "../setup/setupString";
 import { runSelfTest } from "../setup/selfTest";
 import { promptPassphrase } from "./PassphrasePromptModal";
+import { GeneratorModal } from "./GeneratorModal";
 import { DEFAULT_RULES } from "../vault/rules";
 import type { SyncMode } from "../store/syncModes";
 
@@ -49,6 +50,15 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
         ta.inputEl.rows = 4;
         ta.inputEl.style.width = "100%";
       });
+
+    new Setting(containerEl)
+      .setName("Setup-String erzeugen")
+      .setDesc("Öffnet einen Generator, der aus Zugangsdaten einen \"vbridge1:\"-String samt QR-Code baut.")
+      .addButton((b) =>
+        b.setButtonText("Setup-String erzeugen").onClick(() => {
+          new GeneratorModal(this.app).open();
+        }),
+      );
 
     new Setting(containerEl)
       .setName("Gerätename")
