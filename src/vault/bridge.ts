@@ -200,13 +200,16 @@ export class VaultBridge {
         const adapter = this.app.vault.adapter;
         const allPaths = await listAllFiles(adapter);
         const local = new Map<string, string>();
+        const errored = new Set<string>();
         for (const path of allPaths) {
           if (!isHidden(path) || !shouldSync(path, this.rules)) continue;
           try {
             const bytes = new Uint8Array(await adapter.readBinary(path));
             local.set(path, await contentHash(bytes));
           } catch {
-            /* eine kaputte/verschwundene Datei darf den ganzen Lauf nicht abbrechen */
+            // Datei wurde gelistet (existiert), ist aber gerade nicht lesbar
+            // (Lock/TOCTOU) -> KEINE Löschung, diese Runde übergehen.
+            errored.add(path);
           }
         }
         const storeAll = await this.store.pathHashes();
@@ -215,7 +218,7 @@ export class VaultBridge {
         const knownRaw = this.getKnown();
         const known = new Map<string, string>();
         for (const [p, h] of knownRaw) {
-          if (isHidden(p) && shouldSync(p, this.rules)) known.set(p, h);
+          if (isHidden(p) && shouldSync(p, this.rules) && !errored.has(p)) known.set(p, h);
         }
         const plan = planHiddenSync(local, known, store);
         for (const path of plan.uploads) {
@@ -229,7 +232,12 @@ export class VaultBridge {
           });
         }
         for (const path of plan.deleteRemotes) await this.store.deleteFile(path);
-        this.setKnown(new Map(local)); // Baseline = aktueller Plattenstand
+        const newKnown = new Map(local);
+        for (const p of errored) {
+          const prev = knownRaw.get(p);
+          if (prev !== undefined) newKnown.set(p, prev);
+        }
+        this.setKnown(newKnown); // Baseline = aktueller Plattenstand (Fehler behalten alten Stand)
       } catch (e) {
         new Notice(`Vaultbridge: Hidden-Abgleich fehlgeschlagen: ${String(e)}`);
       }

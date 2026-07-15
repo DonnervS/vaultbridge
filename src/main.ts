@@ -154,6 +154,11 @@ export default class VaultbridgePlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings.rules = {
+      ...this.settings.rules,
+      include: [...this.settings.rules.include],
+      exclude: [...this.settings.rules.exclude],
+    };
   }
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
