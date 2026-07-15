@@ -28,6 +28,7 @@ export class VaultBridge {
     private readonly rules: SyncRules,
     private readonly getKnown: () => Map<string, string>,
     private readonly setKnown: (m: Map<string, string>) => void,
+    private readonly onApplied?: (path: string) => void,
   ) {}
 
   start(): void {
@@ -106,7 +107,11 @@ export class VaultBridge {
         const adapter = this.app.vault.adapter;
         const exists = await adapter.exists(note.path);
         if (note.deleted) {
-          if (exists) { this.guard.markApplied(note.path, DELETE_SENTINEL); await adapter.remove(note.path); }
+          if (exists) {
+            this.guard.markApplied(note.path, DELETE_SENTINEL);
+            await adapter.remove(note.path);
+            this.onApplied?.(note.path);
+          }
           this.updateKnown(note.path, null);
           return;
         }
@@ -118,6 +123,7 @@ export class VaultBridge {
         this.guard.markApplied(note.path, targetHash);
         await this.ensureParentAdapter(note.path);
         await adapter.writeBinary(note.path, note.bytes.slice().buffer as ArrayBuffer);
+        this.onApplied?.(note.path);
         this.updateKnown(note.path, targetHash);
         return;
       }
