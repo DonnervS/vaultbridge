@@ -10,6 +10,7 @@ import { startSync, SyncHandle } from "./store/replication";
 import { EchoGuard } from "./vault/applyChange";
 import { VaultBridge } from "./vault/bridge";
 import { promptPassphrase } from "./ui/PassphrasePromptModal";
+import { ConflictListView, VIEW_TYPE_CONFLICTS } from "./ui/ConflictListView";
 
 export interface VaultbridgeSettings {
   setupString: string;
@@ -24,6 +25,7 @@ export default class VaultbridgePlugin extends Plugin {
   private syncHandle: SyncHandle | null = null;
   private bridge: VaultBridge | null = null;
   private localDb: PouchDB.Database | null = null;
+  private store: VaultStore | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -33,6 +35,16 @@ export default class VaultbridgePlugin extends Plugin {
     this.addCommand({ id: "vaultbridge-disconnect", name: "Vaultbridge: Trennen", callback: () => this.disconnect() });
     // Kein Auto-Connect: der Nutzer startet den Sync über den Befehl
     // "Vaultbridge: Verbinden" (nötig, weil eine Passphrase abgefragt werden kann).
+
+    this.registerView(
+      VIEW_TYPE_CONFLICTS,
+      (leaf) => new ConflictListView(leaf, () => this.store),
+    );
+    this.addCommand({
+      id: "vaultbridge-show-conflicts",
+      name: "Vaultbridge: Konflikte anzeigen",
+      callback: () => this.openConflictView(),
+    });
   }
 
   async onunload(): Promise<void> {
@@ -51,6 +63,7 @@ export default class VaultbridgePlugin extends Plugin {
       const keys = await deriveKeys(passphrase, base64urlToBytes(payload.kdfSalt), payload.kdfIter);
       this.localDb = new PouchDB(`vaultbridge-${payload.db}`);
       const store = new VaultStore(this.localDb, keys, payload.opts.chunkSize);
+      this.store = store;
       const guard = new EchoGuard();
       this.bridge = new VaultBridge(this.app, store, guard);
       this.bridge.start();
@@ -73,7 +86,18 @@ export default class VaultbridgePlugin extends Plugin {
     this.bridge = null;
     void this.localDb?.close();
     this.localDb = null;
+    this.store = null;
     this.statusBar?.setInactive();
+  }
+
+  async openConflictView(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)[0];
+    if (!leaf) {
+      leaf = workspace.getRightLeaf(false)!;
+      await leaf.setViewState({ type: VIEW_TYPE_CONFLICTS, active: true });
+    }
+    workspace.revealLeaf(leaf);
   }
 
   async loadSettings(): Promise<void> {
