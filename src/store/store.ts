@@ -101,9 +101,8 @@ export class VaultStore {
   ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta; deleted: boolean } | null> {
     const note = await this.getRaw<NoteDoc>(id);
     if (!note) return null;
-    // decodeFile entschlüsselt path_enc/meta_enc immer; bei gelöschten Notes sind
-    // chunks=[] -> bytes leer. path_enc/meta_enc bleiben beim Löschen erhalten.
-    const decoded = await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
+    const decoded = await this.tryDecode(note);
+    if (!decoded) return null;
     return { path: decoded.path, bytes: decoded.bytes, meta: decoded.meta, deleted: !!note.deleted };
   }
 
