@@ -1,9 +1,9 @@
 import { Notice, Platform, Plugin } from "obsidian";
 import { VaultbridgeSettingsTab } from "./ui/SettingsTab";
 import { StatusBar } from "./ui/StatusBar";
-import { decodeSetup } from "./setup/setupString";
-import { deriveKeys, pathId, VaultKeys } from "./crypto/crypto";
-import { base64urlToBytes } from "./crypto/encoding";
+import { decodeSetup, encodeSetup } from "./setup/setupString";
+import { deriveKeys, encryptBytes, decryptBytes, pathId, VaultKeys } from "./crypto/crypto";
+import { base64urlToBytes, bytesToBase64url, utf8 } from "./crypto/encoding";
 import { PouchDB } from "./store/pouch";
 import { VaultStore } from "./store/store";
 import { startSync, SyncHandle, SyncStatus } from "./store/replication";
@@ -16,6 +16,7 @@ import { SyncMode, shouldReplicateNow } from "./store/syncModes";
 import { planPluginReload } from "./plugins/pluginSync";
 import { GeneratorModal } from "./ui/GeneratorModal";
 import { HistoryModal } from "./ui/HistoryModal";
+import { makeVerifyToken, checkVerifyToken, needsAdoption } from "./crypto/rotation";
 
 export interface VaultbridgeSettings {
   setupString: string;
@@ -29,6 +30,9 @@ export interface VaultbridgeSettings {
   syncMode: SyncMode;
   wifiOnly: boolean;
   intervalSeconds: number;
+  // Lokal bekannte Passphrase-Epoche (M6): erhöht sich bei jeder Rotation,
+  // dient dem Vergleich gegen den im Store abgelegten Epoch-Marker.
+  epoch: number;
 }
 
 const DEFAULT_SETTINGS: VaultbridgeSettings = {
@@ -39,6 +43,7 @@ const DEFAULT_SETTINGS: VaultbridgeSettings = {
   syncMode: "continuous",
   wifiOnly: false,
   intervalSeconds: 120,
+  epoch: 0,
 };
 
 export default class VaultbridgePlugin extends Plugin {
@@ -54,6 +59,20 @@ export default class VaultbridgePlugin extends Plugin {
   private pluginReloadTimer: number | null = null;
   private connectIntervals: number[] = [];
   private knownSaveTimer: number | null = null;
+  // Schützt gegen doppelte Adoptions-Prompts: connect() ruft checkAdoption()
+  // direkt auf, kurz danach kann der erste Sync-Settle (onSyncStatus) sie
+  // erneut auslösen.
+  private checkingAdoption = false;
+  // Als Feld (statt lokale Closure in connect()), damit restartSync() nach
+  // einer Passphrase-Rotation denselben Status-Handler wiederverwenden kann.
+  private readonly onSyncStatus = (s: SyncStatus, info?: string): void => {
+    this.statusBar.setStatus(s, info);
+    if (s === "idle" || s === "paused") {
+      void this.refreshConflicts();
+      void this.bridge?.reconcileHidden();
+      void this.checkAdoption();
+    }
+  };
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -140,15 +159,8 @@ export default class VaultbridgePlugin extends Plugin {
       const mode = this.settings.syncMode;
       const effectiveMode =
         mode === "continuous" && Platform.isMobile && this.settings.wifiOnly ? "interval" : mode;
-      const onStatus = (s: SyncStatus, info?: string): void => {
-        this.statusBar.setStatus(s, info);
-        if (s === "idle" || s === "paused") {
-          void this.refreshConflicts();
-          void this.bridge?.reconcileHidden();
-        }
-      };
       if (effectiveMode === "continuous" && shouldReplicateNow(effectiveMode, this.currentCtx())) {
-        this.syncHandle = startSync(this.localDb, remote, { live: true }, onStatus);
+        this.syncHandle = startSync(this.localDb, remote, { live: true }, this.onSyncStatus);
       } else if (effectiveMode === "interval") {
         const id = this.registerInterval(
           window.setInterval(() => {
@@ -169,6 +181,7 @@ export default class VaultbridgePlugin extends Plugin {
       new Notice("Vaultbridge verbunden.");
       void this.refreshConflicts();
       void this.bridge.reconcileHidden();
+      void this.checkAdoption();
     } catch (e) {
       this.disconnect();
       this.statusBar.setStatus("error", String(e));
@@ -198,6 +211,17 @@ export default class VaultbridgePlugin extends Plugin {
     for (const id of this.connectIntervals) window.clearInterval(id);
     this.connectIntervals = [];
     this.statusBar?.setInactive();
+  }
+
+  /**
+   * (Re-)startet Bridge + kontinuierlichen Live-Sync mit dem aktuellen
+   * Store/Schlüsseln. Wird von rotatePassphrase() genutzt, um nach der
+   * Zwangspause während store.rotate() wieder aufzunehmen.
+   */
+  private restartSync(): void {
+    if (!this.localDb || !this.remote) return;
+    this.bridge?.start();
+    this.syncHandle = startSync(this.localDb, this.remote, { live: true }, this.onSyncStatus);
   }
 
   private currentCtx() {
@@ -250,6 +274,106 @@ export default class VaultbridgePlugin extends Plugin {
     });
     await this.bridge?.reconcileHidden();
     void this.refreshConflicts();
+  }
+
+  /**
+   * Rotiert die Vault-Passphrase: verifiziert die alte Passphrase, pausiert
+   * Bridge + Sync (KRITISCH — verhindert nebenläufige Schreibungen während
+   * store.rotate() die Notizen einsammelt/neu verschlüsselt), rotiert alle
+   * Dateien auf den neuen Schlüssel, schreibt den Epoch-Marker und startet
+   * Bridge + Sync mit den neuen Schlüsseln neu.
+   */
+  async rotatePassphrase(
+    oldPassphrase: string,
+    newPassphrase: string,
+    onProgress: (done: number, total: number) => void,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (!this.store || !this.localDb || !this.remote || !this.keysForHistory) {
+      new Notice("Vaultbridge: nicht verbunden.");
+      return false;
+    }
+    const payload = decodeSetup(this.settings.setupString);
+    // 1. Alte Passphrase verifizieren: Probe mit dem aktuellen Schlüssel
+    // ver-, mit dem aus der eingegebenen alten Passphrase abgeleiteten
+    // Schlüssel entschlüsseln.
+    const oldKeys = await deriveKeys(oldPassphrase, base64urlToBytes(payload.kdfSalt), payload.kdfIter);
+    const probe = await encryptBytes(this.keysForHistory.contentKey, utf8.encode("vaultbridge-probe"));
+    try {
+      if (utf8.decode(await decryptBytes(oldKeys.contentKey, probe)) !== "vaultbridge-probe") throw new Error();
+    } catch {
+      new Notice("Vaultbridge: alte Passphrase falsch.");
+      return false;
+    }
+    // 2. Neuen Schlüssel ableiten.
+    const newSalt = crypto.getRandomValues(new Uint8Array(16));
+    const newKeys = await deriveKeys(newPassphrase, newSalt, payload.kdfIter);
+    // 3. Bridge + Sync PAUSIEREN — keine nebenläufigen Schreibungen während rotate().
+    this.syncHandle?.stop();
+    this.syncHandle = null;
+    this.bridge?.stop();
+    // 4. Rotieren.
+    try {
+      await this.store.rotate(newKeys, onProgress, signal);
+    } catch (e) {
+      this.restartSync(); // wieder aufnehmen (Ring liest den Rest mit dem alten Schlüssel weiter)
+      throw e;
+    }
+    // 5. Epoch-Marker + lokale Config aktualisieren.
+    const epoch = (this.settings.epoch ?? 0) + 1;
+    await this.store.writeEpochMarker({
+      epoch,
+      kdfSalt: bytesToBase64url(newSalt),
+      kdfIter: payload.kdfIter,
+      verify: await makeVerifyToken(newKeys, epoch),
+    });
+    this.settings.epoch = epoch;
+    this.settings.setupString = encodeSetup({
+      ...payload,
+      kdfSalt: bytesToBase64url(newSalt),
+      ...(payload.pp === "embedded" ? { passphrase: newPassphrase } : {}),
+    });
+    this.keysForHistory = newKeys;
+    await this.saveSettings();
+    // 6. Bridge + Sync mit den neuen Schlüsseln neu starten.
+    this.restartSync();
+    return true;
+  }
+
+  /**
+   * Prüft, ob eine Passphrase-Rotation auf einem anderen Gerät stattgefunden
+   * hat (Epoch-Marker im Store höher als die lokal bekannte Epoche) und holt
+   * die neue Passphrase in diesem Fall per Prompt ein.
+   */
+  async checkAdoption(): Promise<void> {
+    if (this.checkingAdoption) return;
+    if (!this.store || !this.keysForHistory) return;
+    const marker = await this.store.readEpochMarker();
+    if (!needsAdoption(this.settings.epoch ?? 0, marker)) return;
+    this.checkingAdoption = true;
+    try {
+      new Notice("Vaultbridge: Die Passphrase wurde auf einem anderen Gerät geändert.");
+      const pass = await promptPassphrase(this.app, "Neue Passphrase eingeben");
+      if (!pass) return;
+      const candidate = await deriveKeys(pass, base64urlToBytes(marker!.kdfSalt), marker!.kdfIter);
+      if (!(await checkVerifyToken(candidate, marker!.epoch, marker!.verify))) {
+        new Notice("Vaultbridge: Passphrase falsch.");
+        return;
+      }
+      this.store.setKeys(candidate, this.keysForHistory); // neu=current, alt=previous (Ring liest beide)
+      this.keysForHistory = candidate;
+      this.settings.epoch = marker!.epoch;
+      const payload = decodeSetup(this.settings.setupString);
+      this.settings.setupString = encodeSetup({
+        ...payload,
+        kdfSalt: marker!.kdfSalt,
+        ...(payload.pp === "embedded" ? { passphrase: pass } : {}),
+      });
+      await this.saveSettings();
+      new Notice("Vaultbridge: Neue Passphrase übernommen.");
+    } finally {
+      this.checkingAdoption = false;
+    }
   }
 
   private async refreshConflicts(): Promise<void> {
