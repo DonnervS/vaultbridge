@@ -1,0 +1,83 @@
+import { describe, it, expect } from "vitest";
+import { deriveKeys } from "../src/crypto/crypto";
+import { utf8 } from "../src/crypto/encoding";
+import { VaultStore } from "../src/store/store";
+import { createTestPouch } from "./helpers/pouch";
+import type { FileMeta } from "../src/store/model";
+
+const meta: FileMeta = { mtime: 1, ctime: 1, size: 2, mime: "text/markdown", isBinary: false };
+
+describe("rotate", () => {
+  it("verschlüsselt aktuelle Dateien mit dem neuen Schlüssel neu (mit neuem Schlüssel lesbar)", async () => {
+    const kOld = await deriveKeys("alt", new Uint8Array(16).fill(1), 50000);
+    const kNew = await deriveKeys("neu", new Uint8Array(16).fill(2), 50000);
+    const store = new VaultStore(createTestPouch(), kOld, 4);
+    await store.putFile("a.md", utf8.encode("Alpha"), meta);
+    await store.putFile("b.md", utf8.encode("Beta"), meta);
+
+    let seen = 0;
+    await store.rotate(kNew, (d) => { seen = d; });
+    expect(seen).toBe(2);
+
+    // Store nach Rotation nutzt kNew -> Dateien lesbar
+    expect(utf8.decode((await store.getFile("a.md"))!.bytes)).toBe("Alpha");
+    expect(utf8.decode((await store.getFile("b.md"))!.bytes)).toBe("Beta");
+  });
+
+  it("ist idempotent/fortsetzbar (erneutes rotate ändert nichts mehr)", async () => {
+    const kOld = await deriveKeys("alt", new Uint8Array(16).fill(1), 50000);
+    const kNew = await deriveKeys("neu", new Uint8Array(16).fill(2), 50000);
+    const store = new VaultStore(createTestPouch(), kOld, 4);
+    await store.putFile("a.md", utf8.encode("Alpha"), meta);
+    await store.rotate(kNew);
+    let seen2 = -1;
+    await store.rotate(kNew, (d, t) => { seen2 = t; });
+    // alle bereits kNew-lesbar -> nichts neu zu rotieren, getFile bleibt korrekt
+    expect(utf8.decode((await store.getFile("a.md"))!.bytes)).toBe("Alpha");
+  });
+
+  it("bricht bei signal.aborted ab", async () => {
+    const kOld = await deriveKeys("alt", new Uint8Array(16).fill(1), 50000);
+    const kNew = await deriveKeys("neu", new Uint8Array(16).fill(2), 50000);
+    const store = new VaultStore(createTestPouch(), kOld, 4);
+    await store.putFile("a.md", utf8.encode("Alpha"), meta);
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(store.rotate(kNew, undefined, ctrl.signal)).rejects.toThrow(/abgebrochen/);
+  });
+
+  it("Abbruch mitten drin: rotierte Dateien bleiben lesbar, Fortsetzen schließt ab", async () => {
+    const kOld = await deriveKeys("alt", new Uint8Array(16).fill(1), 50000);
+    const kNew = await deriveKeys("neu", new Uint8Array(16).fill(2), 50000);
+    const store = new VaultStore(createTestPouch(), kOld, 64);
+    await store.putFile("a.md", utf8.encode("A"), meta);
+    await store.putFile("b.md", utf8.encode("B"), meta);
+    await store.putFile("c.md", utf8.encode("C"), meta);
+
+    const ctrl = new AbortController();
+    await store.rotate(kNew, (done) => { if (done === 1) ctrl.abort(); }, ctrl.signal).catch(() => {});
+    // dank Ring-am-Anfang + dual-key getFile sind ALLE Dateien weiter lesbar
+    expect(utf8.decode((await store.getFile("a.md"))!.bytes)).toBe("A");
+    expect(utf8.decode((await store.getFile("b.md"))!.bytes)).toBe("B");
+
+    await store.rotate(kNew); // fortsetzen
+    expect(utf8.decode((await store.getFile("c.md"))!.bytes)).toBe("C");
+  });
+
+  it("Fortsetzen mit FRISCHEM Salt (anderer newKeys-Wert) verwaist keine Notes", async () => {
+    const kOld = await deriveKeys("alt", new Uint8Array(16).fill(1), 50000);
+    const kNew1 = await deriveKeys("neu", new Uint8Array(16).fill(2), 50000);
+    const kNew2 = await deriveKeys("neu", new Uint8Array(16).fill(3), 50000); // gleiche Passphrase, anderes Salt
+    const store = new VaultStore(createTestPouch(), kOld, 64);
+    await store.putFile("a.md", utf8.encode("A"), meta);
+    await store.putFile("b.md", utf8.encode("B"), meta);
+    await store.putFile("c.md", utf8.encode("C"), meta);
+    const ctrl = new AbortController();
+    await store.rotate(kNew1, (done) => { if (done === 1) ctrl.abort(); }, ctrl.signal).catch(() => {});
+    // Retry mit anderem Salt-Schlüssel: darf nichts verlieren
+    await store.rotate(kNew2);
+    expect(utf8.decode((await store.getFile("a.md"))!.bytes)).toBe("A");
+    expect(utf8.decode((await store.getFile("b.md"))!.bytes)).toBe("B");
+    expect(utf8.decode((await store.getFile("c.md"))!.bytes)).toBe("C");
+  });
+});

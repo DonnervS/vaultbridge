@@ -4,6 +4,7 @@ import { decodeSetup } from "../setup/setupString";
 import { runSelfTest } from "../setup/selfTest";
 import { promptPassphrase } from "./PassphrasePromptModal";
 import { GeneratorModal } from "./GeneratorModal";
+import { RotationModal } from "./RotationModal";
 import { DEFAULT_RULES } from "../vault/rules";
 import type { SyncMode } from "../store/syncModes";
 
@@ -76,6 +77,15 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       .addButton((b) =>
         b.setButtonText("Selbsttest ausführen").setCta().onClick(async () => {
           await this.runSelfTest();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Passphrase ändern")
+      .setDesc("Verschlüsselt alle Dateien mit einer neuen Passphrase neu. Erfordert eine aktive Verbindung.")
+      .addButton((b) =>
+        b.setButtonText("Passphrase ändern").onClick(() => {
+          new RotationModal(this.plugin, this.app).open();
         }),
       );
 

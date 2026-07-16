@@ -2,6 +2,7 @@ import { VaultKeys, pathId } from "../crypto/crypto";
 import { encodeFile, decodeFile } from "./transform";
 import { NoteDoc, ChunkDoc, FileMeta } from "./model";
 import { contentHash } from "../vault/applyChange";
+import { MARKER_ID, EpochMarker } from "../crypto/rotation";
 
 export interface ConflictVersion {
   rev: string;
@@ -16,11 +17,48 @@ export interface FileRevision {
 }
 
 export class VaultStore {
+  // keyring[0] ist der AKTUELLE Schlüssel (für Kodierung/neue IDs), der Rest
+  // sind Entschlüsselungs-Fallbacks aus früheren Rotationen. Variable Länge,
+  // damit `rotate` bei Fortsetzen/frischem Salt niemals einen Schlüssel verliert.
+  private keyring: VaultKeys[];
+
   constructor(
     private readonly db: PouchDB.Database,
-    private readonly keys: VaultKeys,
+    keys: VaultKeys,
     private readonly chunkSize: number,
-  ) {}
+    previousKeys: VaultKeys | null = null,
+  ) {
+    this.keyring = previousKeys ? [keys, previousKeys] : [keys];
+  }
+
+  /** Aktueller (vorderster) Schlüssel des Rings — alle bestehenden `this.keys`-Zugriffe bleiben so gültig. */
+  private get keys(): VaultKeys {
+    return this.keyring[0];
+  }
+
+  setKeys(current: VaultKeys, previous: VaultKeys | null = null): void {
+    this.keyring = previous ? [current, previous] : [current];
+  }
+
+  /**
+   * Versucht ein NoteDoc der Reihe nach mit jedem Schlüssel im Ring zu
+   * entschlüsseln (aktuell zuerst, dann alle vorherigen). Während einer
+   * Passphrase-Rotation (M6) können Docs noch mit einem älteren Schlüssel
+   * verschlüsselt sein, bis sie neu geschrieben werden. Schlägt der ganze
+   * Ring fehl -> null (kontrolliertes Überspringen).
+   */
+  private async tryDecode(
+    note: NoteDoc,
+  ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta } | null> {
+    for (const k of this.keyring) {
+      try {
+        return await decodeFile(k, note, (cid) => this.db.get<ChunkDoc>(cid));
+      } catch {
+        /* falscher Schlüssel oder fehlender Chunk -> nächster Kandidat */
+      }
+    }
+    return null;
+  }
 
   async putFile(path: string, bytes: Uint8Array, meta: FileMeta): Promise<void> {
     const { note, chunks } = await encodeFile(this.keys, path, bytes, meta, this.chunkSize);
@@ -37,11 +75,14 @@ export class VaultStore {
   }
 
   async getFile(path: string): Promise<{ bytes: Uint8Array; meta: FileMeta } | null> {
-    const id = await pathId(this.keys.idKey, path);
-    const note = await this.getRaw<NoteDoc>(id);
+    let note: (NoteDoc & { _rev: string }) | null = null;
+    for (const k of this.keyring) {
+      note = await this.getRaw<NoteDoc>(await pathId(k.idKey, path));
+      if (note) break;
+    }
     if (!note || note.deleted) return null;
-    const decoded = await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
-    return { bytes: decoded.bytes, meta: decoded.meta };
+    const decoded = await this.tryDecode(note);
+    return decoded ? { bytes: decoded.bytes, meta: decoded.meta } : null;
   }
 
   async deleteFile(path: string): Promise<void> {
@@ -75,9 +116,8 @@ export class VaultStore {
   ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta; deleted: boolean } | null> {
     const note = await this.getRaw<NoteDoc>(id);
     if (!note) return null;
-    // decodeFile entschlüsselt path_enc/meta_enc immer; bei gelöschten Notes sind
-    // chunks=[] -> bytes leer. path_enc/meta_enc bleiben beim Löschen erhalten.
-    const decoded = await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
+    const decoded = await this.tryDecode(note);
+    if (!decoded) return null;
     return { path: decoded.path, bytes: decoded.bytes, meta: decoded.meta, deleted: !!note.deleted };
   }
 
@@ -87,7 +127,7 @@ export class VaultStore {
   ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta } | null> {
     try {
       const note = await this.db.get<NoteDoc>(id, { rev });
-      return await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
+      return await this.tryDecode(note);
     } catch {
       return null;
     }
@@ -130,12 +170,8 @@ export class VaultStore {
       return null;
     }
     if (!winning._conflicts || winning._conflicts.length === 0) return null;
-    let local: Awaited<ReturnType<typeof decodeFile>>;
-    try {
-      local = await decodeFile(this.keys, winning, (cid) => this.db.get<ChunkDoc>(cid));
-    } catch {
-      return null;
-    }
+    const local = await this.tryDecode(winning);
+    if (!local) return null;
     const remotes: ConflictVersion[] = [];
     for (const rev of winning._conflicts) {
       const version = await this.readNoteRev(id, rev);
@@ -182,7 +218,8 @@ export class VaultStore {
     for (const row of res.rows) {
       const note = row.doc as (NoteDoc & { _rev: string }) | undefined;
       if (!note || note.type !== "note" || note.deleted) continue;
-      const decoded = await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
+      const decoded = await this.tryDecode(note);
+      if (!decoded) continue; // nicht entschlüsselbar (weder aktueller noch vorheriger Schlüssel) -> überspringen
       map.set(decoded.path, await contentHash(decoded.bytes));
     }
     return map;
@@ -228,5 +265,59 @@ export class VaultStore {
     } catch {
       return null;
     }
+  }
+
+  async rotate(
+    newKeys: VaultKeys,
+    onProgress?: (done: number, total: number) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const res = await this.db.allDocs<NoteDoc>({ startkey: "n:", endkey: "n:￰", include_docs: true });
+    const notes = res.rows
+      .map((r) => r.doc)
+      .filter((d): d is NoteDoc & { _rev: string } => !!d && d.type === "note" && !d.deleted);
+    const total = notes.length;
+    let done = 0;
+    // Neuen Schlüssel voranstellen, ALLE bisherigen als Entschlüsselungs-Fallback behalten
+    // (robust gegen Fortsetzen mit frischem Salt / verketteten Rotationen -> keine Verwaisung).
+    if (this.keyring[0] !== newKeys) {
+      this.keyring = [newKeys, ...this.keyring.filter((k) => k !== newKeys)];
+    }
+    for (const note of notes) {
+      if (signal?.aborted) throw new Error("Rotation abgebrochen");
+      // Schon mit dem neuen Schlüssel lesbar? -> überspringen (idempotent)
+      let alreadyNew = false;
+      try { await decodeFile(newKeys, note, (cid) => this.db.get<ChunkDoc>(cid)); alreadyNew = true; } catch { /* nein */ }
+      if (!alreadyNew) {
+        const decoded = await this.tryDecode(note);
+        if (decoded) {
+          const { note: newNote, chunks } = await encodeFile(newKeys, decoded.path, decoded.bytes, decoded.meta, this.chunkSize);
+          await this.writeChunks(chunks);
+          const prev = await this.getRaw<NoteDoc>(newNote._id);
+          if (prev) newNote._rev = prev._rev;
+          await this.db.put(newNote);
+          if (newNote._id !== note._id) {
+            try {
+              await this.db.remove(note._id, note._rev);
+            } catch (e) {
+              const status = (e as { status?: number }).status;
+              const name = (e as { name?: string }).name;
+              if (status !== 404 && name !== "not_found") throw e;
+            }
+          }
+        }
+      }
+      done++;
+      onProgress?.(done, total);
+    }
+  }
+
+  async readEpochMarker(): Promise<EpochMarker | null> {
+    try { return (await this.db.get(MARKER_ID)) as unknown as EpochMarker; } catch { return null; }
+  }
+  async writeEpochMarker(marker: EpochMarker): Promise<void> {
+    let rev: string | undefined;
+    try { rev = ((await this.db.get(MARKER_ID)) as { _rev: string })._rev; } catch { /* neu */ }
+    await this.db.put({ _id: MARKER_ID, ...(rev ? { _rev: rev } : {}), ...marker });
   }
 }
