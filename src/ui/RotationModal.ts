@@ -136,6 +136,13 @@ export class RotationModal extends Modal {
   }
 
   onClose(): void {
+    // Läuft gerade eine Rotation, wenn das Modal geschlossen wird (z.B. per
+    // Escape), muss sie abgebrochen werden — sonst könnte ein zweites,
+    // später gestartetes Modal eine parallele Rotation mit anderem
+    // Schlüssel auslösen. store.rotate() ist abbrechbar; der Catch-Pfad in
+    // rotatePassphrase() nimmt den Sync danach mit dem alten Schlüssel
+    // wieder auf (der Ring heilt beim nächsten Resume selbst).
+    if (this.running) this.controller?.abort();
     this.contentEl.empty();
   }
 }
