@@ -63,11 +63,13 @@ export class VaultStore {
   }
 
   async getFile(path: string): Promise<{ bytes: Uint8Array; meta: FileMeta } | null> {
-    const id = await pathId(this.keys.idKey, path);
-    const note = await this.getRaw<NoteDoc>(id);
+    let note = await this.getRaw<NoteDoc>(await pathId(this.keys.idKey, path));
+    if (!note && this.previousKeys) {
+      note = await this.getRaw<NoteDoc>(await pathId(this.previousKeys.idKey, path));
+    }
     if (!note || note.deleted) return null;
-    const decoded = await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
-    return { bytes: decoded.bytes, meta: decoded.meta };
+    const decoded = await this.tryDecode(note);
+    return decoded ? { bytes: decoded.bytes, meta: decoded.meta } : null;
   }
 
   async deleteFile(path: string): Promise<void> {
@@ -263,6 +265,14 @@ export class VaultStore {
       .filter((d): d is NoteDoc & { _rev: string } => !!d && d.type === "note" && !d.deleted);
     const total = notes.length;
     let done = 0;
+    // Bei Fortsetzung derselben, bereits laufenden Rotation (erneuter Aufruf mit
+    // identischer newKeys-Referenz nach Abbruch) ist this.keys bereits newKeys —
+    // dann die echten alten Schlüssel aus previousKeys übernehmen statt sie mit
+    // newKeys zu überschreiben (sonst wären noch nicht rotierte Notes nicht mehr
+    // entschlüsselbar). Bei einer frischen/neuen Rotation ist this.keys weiterhin
+    // der alte Schlüssel.
+    const oldKeys = this.keys === newKeys ? this.previousKeys : this.keys;
+    this.setKeys(newKeys, oldKeys); // Ring deckt während der ganzen Rotation beide Generationen ab
     for (const note of notes) {
       if (signal?.aborted) throw new Error("Rotation abgebrochen");
       // Schon mit dem neuen Schlüssel lesbar? -> überspringen (idempotent)
@@ -277,14 +287,18 @@ export class VaultStore {
           if (prev) newNote._rev = prev._rev;
           await this.db.put(newNote);
           if (newNote._id !== note._id) {
-            try { await this.db.remove(note._id, note._rev); } catch { /* schon weg */ }
+            try {
+              await this.db.remove(note._id, note._rev);
+            } catch (e) {
+              const status = (e as { status?: number }).status;
+              const name = (e as { name?: string }).name;
+              if (status !== 404 && name !== "not_found") throw e;
+            }
           }
         }
       }
       done++;
       onProgress?.(done, total);
     }
-    const old = this.keys;
-    this.setKeys(newKeys, old);
   }
 }
