@@ -251,4 +251,40 @@ export class VaultStore {
       return null;
     }
   }
+
+  async rotate(
+    newKeys: VaultKeys,
+    onProgress?: (done: number, total: number) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const res = await this.db.allDocs<NoteDoc>({ startkey: "n:", endkey: "n:￰", include_docs: true });
+    const notes = res.rows
+      .map((r) => r.doc)
+      .filter((d): d is NoteDoc & { _rev: string } => !!d && d.type === "note" && !d.deleted);
+    const total = notes.length;
+    let done = 0;
+    for (const note of notes) {
+      if (signal?.aborted) throw new Error("Rotation abgebrochen");
+      // Schon mit dem neuen Schlüssel lesbar? -> überspringen (idempotent)
+      let alreadyNew = false;
+      try { await decodeFile(newKeys, note, (cid) => this.db.get<ChunkDoc>(cid)); alreadyNew = true; } catch { /* nein */ }
+      if (!alreadyNew) {
+        const decoded = await this.tryDecode(note);
+        if (decoded) {
+          const { note: newNote, chunks } = await encodeFile(newKeys, decoded.path, decoded.bytes, decoded.meta, this.chunkSize);
+          await this.writeChunks(chunks);
+          const prev = await this.getRaw<NoteDoc>(newNote._id);
+          if (prev) newNote._rev = prev._rev;
+          await this.db.put(newNote);
+          if (newNote._id !== note._id) {
+            try { await this.db.remove(note._id, note._rev); } catch { /* schon weg */ }
+          }
+        }
+      }
+      done++;
+      onProgress?.(done, total);
+    }
+    const old = this.keys;
+    this.setKeys(newKeys, old);
+  }
 }
