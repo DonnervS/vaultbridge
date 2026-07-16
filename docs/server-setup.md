@@ -19,10 +19,11 @@ is missing.
 ### 1. Run CouchDB
 
 ```bash
+# Wähle ein starkes Passwort und verwende es überall unten statt "change-me".
 docker run -d --name vaultbridge-couch \
   -p 6984:5984 \
   -e COUCHDB_USER=admin \
-  -e COUCHDB_PASSWORD=change-me-to-something-strong \
+  -e COUCHDB_PASSWORD=change-me \
   -v vaultbridge-couch-data:/opt/couchdb/data \
   couchdb:3
 ```
@@ -38,7 +39,7 @@ services:
       - "6984:5984"
     environment:
       COUCHDB_USER: admin
-      COUCHDB_PASSWORD: change-me-to-something-strong
+      COUCHDB_PASSWORD: change-me # ein starkes Passwort verwenden
     volumes:
       - vaultbridge-couch-data:/opt/couchdb/data
 volumes:
@@ -52,11 +53,12 @@ volumes:
 
 ### 2. Finish the single-node setup
 
-A fresh CouchDB needs its system databases created once:
+A fresh CouchDB needs its three system databases created once:
 
 ```bash
 curl -X PUT http://admin:change-me@localhost:6984/_users
 curl -X PUT http://admin:change-me@localhost:6984/_replicator
+curl -X PUT http://admin:change-me@localhost:6984/_global_changes
 ```
 
 ### 3. Create the vault database
@@ -136,7 +138,8 @@ code). Run the connection self-test — if CORS or credentials are wrong, it wil
   `app://obsidian.md` (desktop) and `capacitor://localhost` (mobile) are in
   `cors/origins` and that `enable_cors` is `true`. Restart is not needed for config-API
   changes.
-- **401 Unauthorized** — wrong username/password, or the database doesn't exist yet.
+- **401 Unauthorized** — wrong username/password.
+- **Database doesn't exist yet** — that's fine. Vaultbridge's self-test reports this as OK, and the database is created automatically on the first sync. You don't need to pre-create it (though the steps above do, which is also fine).
 - **Works on desktop but not mobile** — mobile requires a valid HTTPS certificate and
   `capacitor://localhost` in the allowed origins. Self-signed certs are rejected on
   mobile.

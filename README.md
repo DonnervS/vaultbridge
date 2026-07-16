@@ -10,7 +10,7 @@ Vaultbridge keeps an Obsidian vault in sync across desktop and mobile through a 
 
 ## Features
 
-- **End-to-end encryption.** Content, file paths, and metadata are encrypted with AES-256-GCM. Keys are derived from your passphrase with PBKDF2-HMAC-SHA256 (≥210,000 iterations) and HKDF. File paths are stored as opaque HMACs, and file bodies are split into content-addressed, encrypted chunks — the server sees only ciphertext, opaque ids, and rough structure (how many docs/chunks, roughly how big).
+- **End-to-end encryption.** Content, file paths, and metadata are encrypted with AES-256-GCM. Keys are derived from your passphrase with PBKDF2-HMAC-SHA256 (≥210,000 iterations) and HKDF. Each file is addressed by an opaque HMAC id and its real path is stored separately, AES-GCM-encrypted — so your devices can recover the filename but the server cannot. File bodies are split into content-addressed, encrypted chunks. The server sees only ciphertext, opaque ids, and rough structure (how many docs/chunks, roughly how big).
 - **One-string setup.** A single `vbridge1:…` setup string carries the server connection and encryption parameters. Generate it once, scan the QR code or paste the string on each device, done. The passphrase can be embedded in the string or kept separate and entered per device.
 - **Conflict diff view.** When two devices edit the same note, Vaultbridge shows a two-column diff and lets you adopt changes hunk-by-hunk or take a whole side — no silent "last write wins", no lost edits.
 - **File history.** Browse previous revisions of a note (as far back as your CouchDB retains them), diff any revision against the current version, and restore one as a new, non-destructive revision.
@@ -63,7 +63,7 @@ For a quick manual setup string during local testing, `npm run make-setup` print
 
 - **Resolving conflicts.** When the status-bar badge appears, open the conflict panel to see the two-column diff. Adopt individual changes or take a whole side, then confirm — the losing revision is cleaned up so CouchDB converges.
 - **Viewing history.** Run the command **"Vaultbridge: Datei-Verlauf anzeigen"** (Show file history) for the active note to browse revisions, diff against the current version, and restore one.
-- **Rotating the passphrase.** Use the passphrase-change command. All current files are re-encrypted with the new key; other devices adopt it automatically the next time they sync. Your history remains readable throughout.
+- **Rotating the passphrase.** Use the **"Passphrase ändern"** button in Vaultbridge's settings. All current files are re-encrypted with the new key; other devices adopt it automatically the next time they sync. Your history remains readable throughout.
 
 ---
 
