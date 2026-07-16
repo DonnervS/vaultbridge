@@ -2,6 +2,7 @@ import { VaultKeys, pathId } from "../crypto/crypto";
 import { encodeFile, decodeFile } from "./transform";
 import { NoteDoc, ChunkDoc, FileMeta } from "./model";
 import { contentHash } from "../vault/applyChange";
+import { MARKER_ID, EpochMarker } from "../crypto/rotation";
 
 export interface ConflictVersion {
   rev: string;
@@ -309,5 +310,14 @@ export class VaultStore {
       done++;
       onProgress?.(done, total);
     }
+  }
+
+  async readEpochMarker(): Promise<EpochMarker | null> {
+    try { return (await this.db.get(MARKER_ID)) as unknown as EpochMarker; } catch { return null; }
+  }
+  async writeEpochMarker(marker: EpochMarker): Promise<void> {
+    let rev: string | undefined;
+    try { rev = ((await this.db.get(MARKER_ID)) as { _rev: string })._rev; } catch { /* neu */ }
+    await this.db.put({ _id: MARKER_ID, ...(rev ? { _rev: rev } : {}), ...marker });
   }
 }
