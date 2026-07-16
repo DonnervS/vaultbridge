@@ -354,6 +354,17 @@ export default class VaultbridgePlugin extends Plugin {
       // 2. Neuen Schlüssel ableiten.
       const newSalt = crypto.getRandomValues(new Uint8Array(16));
       const newKeys = await deriveKeys(newPassphrase, newSalt, payload.kdfIter);
+      // Vor-Rotations-Zustand sichern — falls ein Fehler NACH dem Finalisieren
+      // auftritt (z.B. saveSettings() schlägt auf Mobile/Disk-I/O fehl), muss
+      // der catch-Block nicht nur den Store-Schlüssel zurückdrehen, sondern
+      // auch keysForHistory/epoch/setupString wieder in Deckung bringen —
+      // sonst verschlüsselt die alte-Passphrase-Probe der NÄCHSTEN Rotation
+      // mit keysForHistory (fälschlich noch newKeys) gegen die korrekt neu
+      // abgeleiteten oldKeys und schlägt fehl: falsches "alte Passphrase
+      // falsch" genau auf dem Retry-Pfad, den das Modal anbietet.
+      const prevKeysForHistory = this.keysForHistory;
+      const prevEpoch = this.settings.epoch;
+      const prevSetupString = this.settings.setupString;
       // 3. Bridge + Sync PAUSIEREN — keine nebenläufigen Schreibungen während
       // rotate(). Muss auch Intervall-Timer (interval-Modus) und Quit-Handler
       // (onOpenClose-Modus) abräumen, sonst feuern die während store.rotate()
@@ -389,6 +400,11 @@ export default class VaultbridgePlugin extends Plugin {
         // Änderungen würden unter einem Schlüssel verschlüsselt, den kein
         // Peer kennt (stiller Ein-Weg-Sync-Stillstand).
         this.store!.setKeys(oldKeys, newKeys);
+        // In-memory Config im selben Zug zurückdrehen wie den Store-Schlüssel
+        // — siehe Kommentar bei der Sicherung oben.
+        this.keysForHistory = prevKeysForHistory;
+        this.settings.epoch = prevEpoch;
+        this.settings.setupString = prevSetupString;
         throw e;
       } finally {
         // 6. Bridge + Sync IMMER wieder aufnehmen — Erfolg wie Fehler,
