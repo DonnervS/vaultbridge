@@ -1,0 +1,45 @@
+name: Release Obsidian plugin
+
+# Ein Release wird ausgelöst, wenn ein Tag gepusht wird, dessen Name exakt der
+# Version in manifest.json entspricht (ohne führendes "v" — Obsidian-Vorgabe).
+#   git tag 1.0.0 && git push origin 1.0.0
+on:
+  push:
+    tags:
+      - "*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Abhängigkeiten installieren und Plugin bauen
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: GitHub-Release mit Plugin-Artefakten erstellen
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          # Obsidian verlangt, dass der Release-Tag exakt manifest.version entspricht.
+          manifest_version="$(node -p "require('./manifest.json').version")"
+          if [ "$tag" != "$manifest_version" ]; then
+            echo "::error::Tag '$tag' passt nicht zu manifest.json version '$manifest_version'."
+            exit 1
+          fi
+          gh release create "$tag" \
+            --title="$tag" \
+            --generate-notes \
+            main.js manifest.json styles.css
