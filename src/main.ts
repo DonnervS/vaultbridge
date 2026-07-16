@@ -1,4 +1,4 @@
-import { Notice, Platform, Plugin } from "obsidian";
+import { EventRef, Notice, Platform, Plugin } from "obsidian";
 import { VaultbridgeSettingsTab } from "./ui/SettingsTab";
 import { StatusBar } from "./ui/StatusBar";
 import { decodeSetup, encodeSetup } from "./setup/setupString";
@@ -58,6 +58,11 @@ export default class VaultbridgePlugin extends Plugin {
   private pluginChanges = new Set<string>();
   private pluginReloadTimer: number | null = null;
   private connectIntervals: number[] = [];
+  // EventRefs der (onOpenClose-)Quit-Handler, damit stopSyncStack() sie neben
+  // registerEvent() (Unload-Sicherheit) auch manuell abräumen kann — nötig,
+  // weil restartSync()/rotatePassphrase() sie schon zur Laufzeit ersetzen,
+  // lange vor onunload().
+  private syncEventRefs: EventRef[] = [];
   private knownSaveTimer: number | null = null;
   // Schützt gegen doppelte Adoptions-Prompts: connect() ruft checkAdoption()
   // direkt auf, kurz danach kann der erste Sync-Settle (onSyncStatus) sie
@@ -175,9 +180,7 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   disconnect(): void {
-    this.syncHandle?.stop();
-    this.syncHandle = null;
-    this.bridge?.stop();
+    this.stopSyncStack();
     this.bridge = null;
     void this.localDb?.close();
     this.localDb = null;
@@ -193,9 +196,26 @@ export default class VaultbridgePlugin extends Plugin {
       this.knownSaveTimer = null;
       void this.saveSettings();
     }
+    this.statusBar?.setInactive();
+  }
+
+  /**
+   * Räumt sämtliche sync-treibenden Registrierungen ab: den laufenden
+   * SyncHandle (kontinuierlicher Live-Sync), die Bridge, alle Intervall-Timer
+   * (interval-Modus) und alle Quit-Handler (onOpenClose-Modus). Zentral
+   * genutzt von disconnect(), restartSync() und rotatePassphrase() (Pause vor
+   * store.rotate()) — sonst laufen Intervall-Timer/Quit-Handler während der
+   * Rotation weiter (nebenläufige Schreibungen) bzw. werden bei jedem Neustart
+   * doppelt registriert (Leak).
+   */
+  private stopSyncStack(): void {
+    this.syncHandle?.stop();
+    this.syncHandle = null;
+    this.bridge?.stop();
     for (const id of this.connectIntervals) window.clearInterval(id);
     this.connectIntervals = [];
-    this.statusBar?.setInactive();
+    for (const ref of this.syncEventRefs) this.app.workspace.offref(ref);
+    this.syncEventRefs = [];
   }
 
   /**
@@ -206,6 +226,7 @@ export default class VaultbridgePlugin extends Plugin {
    */
   private restartSync(): void {
     if (!this.localDb || !this.remote) return;
+    this.stopSyncStack(); // idempotente Teilräumung vor dem Neustart — sonst Leak (doppelte Timer/Handler)
     this.bridge?.start();
     this.startSyncForMode();
   }
@@ -236,11 +257,11 @@ export default class VaultbridgePlugin extends Plugin {
       this.connectIntervals.push(id);
     } else if (effectiveMode === "onOpenClose") {
       if (shouldReplicateNow(effectiveMode, this.currentCtx())) void this.syncOnce();
-      this.registerEvent(
-        this.app.workspace.on("quit", (tasks) => {
-          if (shouldReplicateNow(effectiveMode, this.currentCtx())) tasks.addPromise(this.syncOnce());
-        }),
-      );
+      const ref = this.app.workspace.on("quit", (tasks) => {
+        if (shouldReplicateNow(effectiveMode, this.currentCtx())) tasks.addPromise(this.syncOnce());
+      });
+      this.registerEvent(ref);
+      this.syncEventRefs.push(ref);
     }
     // manual: nur der "Sync jetzt"-Befehl
   }
@@ -332,10 +353,11 @@ export default class VaultbridgePlugin extends Plugin {
       // 2. Neuen Schlüssel ableiten.
       const newSalt = crypto.getRandomValues(new Uint8Array(16));
       const newKeys = await deriveKeys(newPassphrase, newSalt, payload.kdfIter);
-      // 3. Bridge + Sync PAUSIEREN — keine nebenläufigen Schreibungen während rotate().
-      this.syncHandle?.stop();
-      this.syncHandle = null;
-      this.bridge?.stop();
+      // 3. Bridge + Sync PAUSIEREN — keine nebenläufigen Schreibungen während
+      // rotate(). Muss auch Intervall-Timer (interval-Modus) und Quit-Handler
+      // (onOpenClose-Modus) abräumen, sonst feuern die während store.rotate()
+      // weiter und schreiben nebenläufig.
+      this.stopSyncStack();
       // 4. Rotieren.
       try {
         await this.store.rotate(newKeys, onProgress, signal);
