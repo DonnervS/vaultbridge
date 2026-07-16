@@ -125,7 +125,7 @@ export default class VaultbridgePlugin extends Plugin {
 
     // Regelmäßiger Abgleich versteckter Dateien (Dotfiles/.claude/Plugins):
     // diese lösen keine indizierten Vault-Events aus, daher periodisches Polling.
-    this.registerInterval(window.setInterval(() => void this.bridge?.reconcileHidden(), 30000));
+    this.registerInterval(window.setInterval(() => { if (!this.rotating) void this.bridge?.reconcileHidden(); }, 30000));
   }
 
   async onunload(): Promise<void> {
@@ -307,6 +307,7 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   async syncOnce(): Promise<void> {
+    if (this.rotating) { new Notice("Vaultbridge: Rotation läuft — Sync pausiert."); return; }
     if (!this.localDb || !this.remote) { new Notice("Vaultbridge: nicht verbunden."); return; }
     await new Promise<void>((resolve) => {
       startSync(this.localDb!, this.remote!, { live: false }, (s, info) => {
@@ -358,32 +359,43 @@ export default class VaultbridgePlugin extends Plugin {
       // (onOpenClose-Modus) abräumen, sonst feuern die während store.rotate()
       // weiter und schreiben nebenläufig.
       this.stopSyncStack();
-      // 4. Rotieren.
+      // 4.-5. Rotieren + finalisieren (Epoch-Marker, lokale Config) — beides in
+      // EINEM try, damit ein Fehler in JEDEM Teilschritt (rotate() selbst ODER
+      // Marker/Settings/Setup-String danach) denselben Revert + Resume auslöst.
       try {
         await this.store.rotate(newKeys, onProgress, signal);
+        // 5. Epoch-Marker + lokale Config aktualisieren.
+        const epoch = (this.settings.epoch ?? 0) + 1;
+        await this.store.writeEpochMarker({
+          epoch,
+          kdfSalt: bytesToBase64url(newSalt),
+          kdfIter: payload.kdfIter,
+          verify: await makeVerifyToken(newKeys, epoch),
+        });
+        this.settings.epoch = epoch;
+        this.settings.setupString = encodeSetup({
+          ...payload,
+          kdfSalt: bytesToBase64url(newSalt),
+          ...(payload.pp === "embedded" ? { passphrase: newPassphrase } : {}),
+        });
+        this.keysForHistory = newKeys;
+        await this.saveSettings();
+        return true;
       } catch (e) {
-        this.restartSync(); // wieder aufnehmen (Ring liest den Rest mit dem alten Schlüssel weiter)
+        // Encoder zurück auf den ALTEN Schlüssel drehen (neu bleibt als
+        // Lese-Fallback erhalten) — sonst verschlüsselt der Store bei einer
+        // abgebrochenen Rotation weiter mit newKeys, während Settings/
+        // keysForHistory noch auf dem alten Schlüssel stehen: spätere
+        // Änderungen würden unter einem Schlüssel verschlüsselt, den kein
+        // Peer kennt (stiller Ein-Weg-Sync-Stillstand).
+        this.store!.setKeys(oldKeys, newKeys);
         throw e;
+      } finally {
+        // 6. Bridge + Sync IMMER wieder aufnehmen — Erfolg wie Fehler,
+        // sonst bleibt der Sync bei einem Finalisierungsfehler dauerhaft
+        // pausiert.
+        this.restartSync();
       }
-      // 5. Epoch-Marker + lokale Config aktualisieren.
-      const epoch = (this.settings.epoch ?? 0) + 1;
-      await this.store.writeEpochMarker({
-        epoch,
-        kdfSalt: bytesToBase64url(newSalt),
-        kdfIter: payload.kdfIter,
-        verify: await makeVerifyToken(newKeys, epoch),
-      });
-      this.settings.epoch = epoch;
-      this.settings.setupString = encodeSetup({
-        ...payload,
-        kdfSalt: bytesToBase64url(newSalt),
-        ...(payload.pp === "embedded" ? { passphrase: newPassphrase } : {}),
-      });
-      this.keysForHistory = newKeys;
-      await this.saveSettings();
-      // 6. Bridge + Sync mit den neuen Schlüsseln neu starten.
-      this.restartSync();
-      return true;
     } finally {
       this.rotating = false;
     }
