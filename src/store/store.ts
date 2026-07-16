@@ -9,6 +9,12 @@ export interface ConflictVersion {
   meta: FileMeta;
 }
 
+export interface FileRevision {
+  rev: string;
+  bytes: Uint8Array;
+  meta: FileMeta;
+}
+
 export class VaultStore {
   constructor(
     private readonly db: PouchDB.Database,
@@ -85,6 +91,29 @@ export class VaultStore {
     } catch {
       return null;
     }
+  }
+
+  async listRevisions(id: string): Promise<FileRevision[]> {
+    let revsInfo: { rev: string; status: string }[];
+    try {
+      const doc = await this.db.get<NoteDoc>(id, { revs_info: true });
+      revsInfo = ((doc as unknown as { _revs_info?: { rev: string; status: string }[] })._revs_info) ?? [];
+    } catch {
+      return [];
+    }
+    const out: FileRevision[] = [];
+    for (const entry of revsInfo) {
+      if (entry.status !== "available") continue; // compaktierte/fehlende Revisionen überspringen
+      const version = await this.readNoteRev(id, entry.rev);
+      if (version) out.push({ rev: entry.rev, bytes: version.bytes, meta: version.meta });
+    }
+    return out; // PouchDB liefert revs_info von neu nach alt
+  }
+
+  async restoreRevision(id: string, rev: string): Promise<void> {
+    const version = await this.readNoteRev(id, rev);
+    if (!version) throw new Error("Revision nicht verfügbar (evtl. bereinigt).");
+    await this.putFile(version.path, version.bytes, version.meta);
   }
 
   async getConflict(id: string): Promise<{

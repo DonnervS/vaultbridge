@@ -9,3 +9,5 @@
 .vb-binary { display: flex; gap: 12px; }
 .vb-card { border: 1px solid var(--background-modifier-border); padding: 12px; cursor: pointer; border-radius: 6px; }
 .vb-card.vb-chosen { outline: 2px solid var(--interactive-accent); }
+.vb-history-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.vb-history-detail { border-top: 1px solid var(--background-modifier-border); padding-top: 8px; }

@@ -2,7 +2,7 @@ import { Notice, Platform, Plugin } from "obsidian";
 import { VaultbridgeSettingsTab } from "./ui/SettingsTab";
 import { StatusBar } from "./ui/StatusBar";
 import { decodeSetup } from "./setup/setupString";
-import { deriveKeys } from "./crypto/crypto";
+import { deriveKeys, pathId, VaultKeys } from "./crypto/crypto";
 import { base64urlToBytes } from "./crypto/encoding";
 import { PouchDB } from "./store/pouch";
 import { VaultStore } from "./store/store";
@@ -15,6 +15,7 @@ import { ConflictListView, VIEW_TYPE_CONFLICTS } from "./ui/ConflictListView";
 import { SyncMode, shouldReplicateNow } from "./store/syncModes";
 import { planPluginReload } from "./plugins/pluginSync";
 import { GeneratorModal } from "./ui/GeneratorModal";
+import { HistoryModal } from "./ui/HistoryModal";
 
 export interface VaultbridgeSettings {
   setupString: string;
@@ -48,6 +49,7 @@ export default class VaultbridgePlugin extends Plugin {
   private localDb: PouchDB.Database | null = null;
   private remote: PouchDB.Database | null = null;
   private store: VaultStore | null = null;
+  private keysForHistory: VaultKeys | null = null;
   private pluginChanges = new Set<string>();
   private pluginReloadTimer: number | null = null;
   private connectIntervals: number[] = [];
@@ -81,6 +83,16 @@ export default class VaultbridgePlugin extends Plugin {
       name: "Vaultbridge: Setup-String erzeugen",
       callback: () => new GeneratorModal(this.app).open(),
     });
+    this.addCommand({
+      id: "vaultbridge-file-history",
+      name: "Vaultbridge: Datei-Verlauf anzeigen",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || !this.store) return false;
+        if (!checking) void this.openHistory(file.path);
+        return true;
+      },
+    });
 
     // Regelmäßiger Abgleich versteckter Dateien (Dotfiles/.claude/Plugins):
     // diese lösen keine indizierten Vault-Events aus, daher periodisches Polling.
@@ -101,6 +113,7 @@ export default class VaultbridgePlugin extends Plugin {
         if (!passphrase) { new Notice("Vaultbridge: keine Passphrase, abgebrochen."); return; }
       }
       const keys = await deriveKeys(passphrase, base64urlToBytes(payload.kdfSalt), payload.kdfIter);
+      this.keysForHistory = keys;
       this.localDb = new PouchDB(`vaultbridge-${payload.db}`);
       const store = new VaultStore(this.localDb, keys, payload.opts.chunkSize);
       this.store = store;
@@ -172,6 +185,7 @@ export default class VaultbridgePlugin extends Plugin {
     this.localDb = null;
     this.remote = null;
     this.store = null;
+    this.keysForHistory = null;
     if (this.pluginReloadTimer !== null) {
       window.clearTimeout(this.pluginReloadTimer);
       this.pluginReloadTimer = null;
@@ -265,6 +279,14 @@ export default class VaultbridgePlugin extends Plugin {
       await leaf.setViewState({ type: VIEW_TYPE_CONFLICTS, active: true });
     }
     workspace.revealLeaf(leaf);
+  }
+
+  private async openHistory(path: string): Promise<void> {
+    const store = this.store;
+    const keys = this.keysForHistory;
+    if (!store || !keys) { new Notice("Vaultbridge: nicht verbunden."); return; }
+    const id = await pathId(keys.idKey, path);
+    new HistoryModal(store, id, path, () => {}, this.app).open();
   }
 
   async loadSettings(): Promise<void> {
