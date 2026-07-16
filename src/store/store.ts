@@ -18,9 +18,35 @@ export interface FileRevision {
 export class VaultStore {
   constructor(
     private readonly db: PouchDB.Database,
-    private readonly keys: VaultKeys,
+    private keys: VaultKeys,
     private readonly chunkSize: number,
+    private previousKeys: VaultKeys | null = null,
   ) {}
+
+  setKeys(current: VaultKeys, previous: VaultKeys | null = null): void {
+    this.keys = current;
+    this.previousKeys = previous;
+  }
+
+  /**
+   * Versucht ein NoteDoc zuerst mit dem aktuellen, dann (falls vorhanden) mit
+   * dem vorherigen Schlüssel zu entschlüsseln. Während einer Passphrase-Rotation
+   * (M6) können Docs noch mit dem alten Schlüssel verschlüsselt sein, bis sie
+   * neu geschrieben werden. Schlägt beides fehl -> null (kontrolliertes Überspringen).
+   */
+  private async tryDecode(
+    note: NoteDoc,
+  ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta } | null> {
+    const candidates = this.previousKeys ? [this.keys, this.previousKeys] : [this.keys];
+    for (const k of candidates) {
+      try {
+        return await decodeFile(k, note, (cid) => this.db.get<ChunkDoc>(cid));
+      } catch {
+        /* falscher Schlüssel oder fehlender Chunk -> nächster Kandidat */
+      }
+    }
+    return null;
+  }
 
   async putFile(path: string, bytes: Uint8Array, meta: FileMeta): Promise<void> {
     const { note, chunks } = await encodeFile(this.keys, path, bytes, meta, this.chunkSize);
@@ -87,7 +113,7 @@ export class VaultStore {
   ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta } | null> {
     try {
       const note = await this.db.get<NoteDoc>(id, { rev });
-      return await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
+      return await this.tryDecode(note);
     } catch {
       return null;
     }
@@ -130,12 +156,8 @@ export class VaultStore {
       return null;
     }
     if (!winning._conflicts || winning._conflicts.length === 0) return null;
-    let local: Awaited<ReturnType<typeof decodeFile>>;
-    try {
-      local = await decodeFile(this.keys, winning, (cid) => this.db.get<ChunkDoc>(cid));
-    } catch {
-      return null;
-    }
+    const local = await this.tryDecode(winning);
+    if (!local) return null;
     const remotes: ConflictVersion[] = [];
     for (const rev of winning._conflicts) {
       const version = await this.readNoteRev(id, rev);
@@ -182,7 +204,8 @@ export class VaultStore {
     for (const row of res.rows) {
       const note = row.doc as (NoteDoc & { _rev: string }) | undefined;
       if (!note || note.type !== "note" || note.deleted) continue;
-      const decoded = await decodeFile(this.keys, note, (cid) => this.db.get<ChunkDoc>(cid));
+      const decoded = await this.tryDecode(note);
+      if (!decoded) continue; // nicht entschlüsselbar (weder aktueller noch vorheriger Schlüssel) -> überspringen
       map.set(decoded.path, await contentHash(decoded.bytes));
     }
     return map;
