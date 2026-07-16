@@ -1,0 +1,27 @@
+name: CI
+
+# Baut das Plugin und lässt die komplette Testsuite bei jedem Push und PR laufen.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Build (Typprüfung + esbuild + Bundle-Guard)
+        run: npm run build
