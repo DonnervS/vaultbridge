@@ -16,29 +16,40 @@ export interface FileRevision {
 }
 
 export class VaultStore {
+  // keyring[0] ist der AKTUELLE Schlüssel (für Kodierung/neue IDs), der Rest
+  // sind Entschlüsselungs-Fallbacks aus früheren Rotationen. Variable Länge,
+  // damit `rotate` bei Fortsetzen/frischem Salt niemals einen Schlüssel verliert.
+  private keyring: VaultKeys[];
+
   constructor(
     private readonly db: PouchDB.Database,
-    private keys: VaultKeys,
+    keys: VaultKeys,
     private readonly chunkSize: number,
-    private previousKeys: VaultKeys | null = null,
-  ) {}
+    previousKeys: VaultKeys | null = null,
+  ) {
+    this.keyring = previousKeys ? [keys, previousKeys] : [keys];
+  }
+
+  /** Aktueller (vorderster) Schlüssel des Rings — alle bestehenden `this.keys`-Zugriffe bleiben so gültig. */
+  private get keys(): VaultKeys {
+    return this.keyring[0];
+  }
 
   setKeys(current: VaultKeys, previous: VaultKeys | null = null): void {
-    this.keys = current;
-    this.previousKeys = previous;
+    this.keyring = previous ? [current, previous] : [current];
   }
 
   /**
-   * Versucht ein NoteDoc zuerst mit dem aktuellen, dann (falls vorhanden) mit
-   * dem vorherigen Schlüssel zu entschlüsseln. Während einer Passphrase-Rotation
-   * (M6) können Docs noch mit dem alten Schlüssel verschlüsselt sein, bis sie
-   * neu geschrieben werden. Schlägt beides fehl -> null (kontrolliertes Überspringen).
+   * Versucht ein NoteDoc der Reihe nach mit jedem Schlüssel im Ring zu
+   * entschlüsseln (aktuell zuerst, dann alle vorherigen). Während einer
+   * Passphrase-Rotation (M6) können Docs noch mit einem älteren Schlüssel
+   * verschlüsselt sein, bis sie neu geschrieben werden. Schlägt der ganze
+   * Ring fehl -> null (kontrolliertes Überspringen).
    */
   private async tryDecode(
     note: NoteDoc,
   ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta } | null> {
-    const candidates = this.previousKeys ? [this.keys, this.previousKeys] : [this.keys];
-    for (const k of candidates) {
+    for (const k of this.keyring) {
       try {
         return await decodeFile(k, note, (cid) => this.db.get<ChunkDoc>(cid));
       } catch {
@@ -63,9 +74,10 @@ export class VaultStore {
   }
 
   async getFile(path: string): Promise<{ bytes: Uint8Array; meta: FileMeta } | null> {
-    let note = await this.getRaw<NoteDoc>(await pathId(this.keys.idKey, path));
-    if (!note && this.previousKeys) {
-      note = await this.getRaw<NoteDoc>(await pathId(this.previousKeys.idKey, path));
+    let note: (NoteDoc & { _rev: string }) | null = null;
+    for (const k of this.keyring) {
+      note = await this.getRaw<NoteDoc>(await pathId(k.idKey, path));
+      if (note) break;
     }
     if (!note || note.deleted) return null;
     const decoded = await this.tryDecode(note);
@@ -265,14 +277,11 @@ export class VaultStore {
       .filter((d): d is NoteDoc & { _rev: string } => !!d && d.type === "note" && !d.deleted);
     const total = notes.length;
     let done = 0;
-    // Bei Fortsetzung derselben, bereits laufenden Rotation (erneuter Aufruf mit
-    // identischer newKeys-Referenz nach Abbruch) ist this.keys bereits newKeys —
-    // dann die echten alten Schlüssel aus previousKeys übernehmen statt sie mit
-    // newKeys zu überschreiben (sonst wären noch nicht rotierte Notes nicht mehr
-    // entschlüsselbar). Bei einer frischen/neuen Rotation ist this.keys weiterhin
-    // der alte Schlüssel.
-    const oldKeys = this.keys === newKeys ? this.previousKeys : this.keys;
-    this.setKeys(newKeys, oldKeys); // Ring deckt während der ganzen Rotation beide Generationen ab
+    // Neuen Schlüssel voranstellen, ALLE bisherigen als Entschlüsselungs-Fallback behalten
+    // (robust gegen Fortsetzen mit frischem Salt / verketteten Rotationen -> keine Verwaisung).
+    if (this.keyring[0] !== newKeys) {
+      this.keyring = [newKeys, ...this.keyring.filter((k) => k !== newKeys)];
+    }
     for (const note of notes) {
       if (signal?.aborted) throw new Error("Rotation abgebrochen");
       // Schon mit dem neuen Schlüssel lesbar? -> überspringen (idempotent)

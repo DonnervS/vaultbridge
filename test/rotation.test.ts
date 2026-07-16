@@ -63,4 +63,21 @@ describe("rotate", () => {
     await store.rotate(kNew); // fortsetzen
     expect(utf8.decode((await store.getFile("c.md"))!.bytes)).toBe("C");
   });
+
+  it("Fortsetzen mit FRISCHEM Salt (anderer newKeys-Wert) verwaist keine Notes", async () => {
+    const kOld = await deriveKeys("alt", new Uint8Array(16).fill(1), 50000);
+    const kNew1 = await deriveKeys("neu", new Uint8Array(16).fill(2), 50000);
+    const kNew2 = await deriveKeys("neu", new Uint8Array(16).fill(3), 50000); // gleiche Passphrase, anderes Salt
+    const store = new VaultStore(createTestPouch(), kOld, 64);
+    await store.putFile("a.md", utf8.encode("A"), meta);
+    await store.putFile("b.md", utf8.encode("B"), meta);
+    await store.putFile("c.md", utf8.encode("C"), meta);
+    const ctrl = new AbortController();
+    await store.rotate(kNew1, (done) => { if (done === 1) ctrl.abort(); }, ctrl.signal).catch(() => {});
+    // Retry mit anderem Salt-Schlüssel: darf nichts verlieren
+    await store.rotate(kNew2);
+    expect(utf8.decode((await store.getFile("a.md"))!.bytes)).toBe("A");
+    expect(utf8.decode((await store.getFile("b.md"))!.bytes)).toBe("B");
+    expect(utf8.decode((await store.getFile("c.md"))!.bytes)).toBe("C");
+  });
 });
