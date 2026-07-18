@@ -27,22 +27,12 @@ export const DEFAULT_RULES: SyncRules = {
   exclude: [
     ".obsidian/workspace*.json", // geräte-lokaler Fenster-/UI-Zustand
     ".obsidian/graph.json",      // geräte-lokale Graph-Ansicht
+    ".git",                      // Git-Interna — Datei-Sync würde Repos beschädigen (überall)
     ".trash",                    // Obsidian-Papierkorb (überall)
     ".DS_Store",                 // macOS-Metadaten (überall)
   ],
   rulesVersion: RULES_VERSION,
 };
-
-// Alte v1-Default-Include-Allowlist — nur für die Migrations-Erkennung.
-const V1_DEFAULT_INCLUDE = [
-  ".claude/**",
-  ".obsidian/plugins/**",
-  ".obsidian/snippets/**",
-  ".obsidian/themes/**",
-  ".obsidian/community-plugins.json",
-  ".obsidian/appearance.json",
-  ".obsidian/hotkeys.json",
-];
 
 export function isHidden(path: string): boolean {
   return path.split("/").some((seg) => seg.startsWith("."));
@@ -133,7 +123,11 @@ export function shouldSync(path: string, rules: SyncRules): boolean {
  */
 export function folderIsExcluded(folderPath: string, rules: SyncRules): boolean {
   if (rules.include.length > 0) return false;
-  return matchesAny(folderPath, rules.exclude);
+  // Nur Nicht-Glob-Einträge haben garantierte Teilbaum-Semantik. Ein Glob wie
+  // `Dev/*` kann den Ordner `Dev/x` treffen, ohne dessen Nachfahren
+  // `Dev/x/tief.md` zu treffen — über solche Einträge NIE prunen, sonst würden
+  // Dateien fälschlich vom Scan ausgeschlossen.
+  return rules.exclude.some((e) => !isGlob(e) && matchesEntry(folderPath, e));
 }
 
 /**
@@ -145,8 +139,9 @@ export function folderIsExcluded(folderPath: string, rules: SyncRules): boolean 
 export function migrateRules(raw: SyncRules | undefined | null): SyncRules {
   if (!raw) return cloneRules(DEFAULT_RULES);
   if (raw.rulesVersion === RULES_VERSION) return cloneRules(raw);
-  const userExcludes = (raw.exclude ?? []).filter((e) => !V1_DEFAULT_INCLUDE.includes(e));
-  const exclude = [...new Set([...DEFAULT_RULES.exclude, ...userExcludes])];
+  // Custom-Ausschlüsse des Nutzers immer behalten (Ausschluss ist die sichere
+  // Richtung) und mit den v2-Defaults vereinigen.
+  const exclude = [...new Set([...DEFAULT_RULES.exclude, ...(raw.exclude ?? [])])];
   return {
     syncHidden: raw.syncHidden ?? true,
     include: [], // v1-Allowlist verworfen — v2 synct versteckte Dateien ohnehin

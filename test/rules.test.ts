@@ -125,6 +125,12 @@ describe("rules – DEFAULT_RULES", () => {
     expect(shouldSync(".obsidian/plugins/vaultbridge/main.js", DEFAULT_RULES)).toBe(false);
   });
 
+  it("schließt .git-Interna standardmäßig aus (Datei-Sync würde Repos beschädigen)", () => {
+    expect(shouldSync("Dev/projekt/.git/config", DEFAULT_RULES)).toBe(false);
+    expect(shouldSync("Dev/projekt/.git/objects/ab/cd", DEFAULT_RULES)).toBe(false);
+    expect(shouldSync(".git/HEAD", DEFAULT_RULES)).toBe(false);
+  });
+
   it("synct node_modules standardmäßig (Nutzer schließt bei Bedarf selbst aus)", () => {
     expect(shouldSync("Dev/p/node_modules/x.js", DEFAULT_RULES)).toBe(true);
   });
@@ -147,6 +153,14 @@ describe("folderIsExcluded (Scan-Pruning)", () => {
   it("prunt nicht, wenn es Include-Ausnahmen gibt (Korrektheit vor Perf)", () => {
     const r: SyncRules = { syncHidden: true, include: ["node_modules/keep.js"], exclude: ["node_modules"] };
     expect(folderIsExcluded("node_modules", r)).toBe(false);
+  });
+
+  it("prunt NIE über Globs (Glob kann Ordner treffen, aber nicht alle Nachfahren)", () => {
+    const r: SyncRules = { syncHidden: true, include: [], exclude: ["Dev/*"] };
+    // Der Ordner Dev/.config würde vom Glob getroffen ...
+    expect(folderIsExcluded("Dev/.config", r)).toBe(false); // ... darf aber NICHT geprunt werden,
+    // denn die tiefere Datei soll synchronisiert werden:
+    expect(shouldSync("Dev/.config/keys.json", r)).toBe(true);
   });
 });
 
@@ -180,6 +194,14 @@ describe("migrateRules (v1 -> v2)", () => {
     expect(v2.exclude).toContain("node_modules");
     expect(v2.exclude).toContain("MeinGeheimordner");
     expect(v2.exclude).toContain(".obsidian/workspace*.json"); // v2-Default dazu
+  });
+
+  it("verwirft KEINEN Ausschluss, auch wenn er wie eine alte Include-Glob aussieht", () => {
+    // Ein v1-Nutzer hatte .claude/** bewusst im AUSSCHLUSS (nicht syncen).
+    const v1: SyncRules = { syncHidden: true, include: [], exclude: [".claude/**", ".obsidian/plugins/**"] };
+    const v2 = migrateRules(v1);
+    expect(v2.exclude).toContain(".claude/**");
+    expect(v2.exclude).toContain(".obsidian/plugins/**");
   });
 
   it("v2-Regeln werden unverändert (aber frisch kopiert) zurückgegeben", () => {

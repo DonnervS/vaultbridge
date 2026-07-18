@@ -112,7 +112,8 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       .setDesc(
         "Ein Dateipfad (Dev/geheim.md) schließt genau die Datei aus. " +
           "Ein Ordner (Dev/projekt/node_modules) schließt ihn samt Unterordnern aus. " +
-          "Ein Name ohne Schrägstrich (node_modules) greift überall. Globs (*, **) sind auch erlaubt.",
+          "Ein Name ohne Schrägstrich (node_modules) greift ÜBERALL im Vault — nutze einen " +
+          "vollständigen Pfad, wenn du nur einen bestimmten Ordner/eine Datei meinst. Globs (*, **) sind auch erlaubt.",
       )
       .addTextArea((ta) => {
         ta.setValue(this.plugin.settings.rules.exclude.join("\n")).onChange(async (value) => {
