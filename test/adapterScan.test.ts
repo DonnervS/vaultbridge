@@ -19,4 +19,22 @@ describe("listAllFiles", () => {
   it("leerer Baum ergibt leere Liste", async () => {
     expect(await listAllFiles(fakeAdapter({}), "")).toEqual([]);
   });
+
+  it("überspringt Ordner, die shouldEnter ablehnt (kein Abstieg)", async () => {
+    let listedNodeModules = false;
+    const adapter: ListingAdapter = {
+      list: async (p) => {
+        if (p === "Dev/node_modules") listedNodeModules = true;
+        const tree: Record<string, { files: string[]; folders: string[] }> = {
+          "": { files: [], folders: ["Dev"] },
+          "Dev": { files: ["Dev/main.ts"], folders: ["Dev/node_modules"] },
+          "Dev/node_modules": { files: ["Dev/node_modules/x.js"], folders: [] },
+        };
+        return tree[p] ?? { files: [], folders: [] };
+      },
+    };
+    const files = await listAllFiles(adapter, "", (folder) => folder !== "Dev/node_modules");
+    expect(files).toEqual(["Dev/main.ts"]);
+    expect(listedNodeModules).toBe(false); // Ordner wurde gar nicht erst betreten
+  });
 });
