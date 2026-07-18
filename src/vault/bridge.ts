@@ -2,7 +2,7 @@ import { App, TAbstractFile, TFile, Notice } from "obsidian";
 import { VaultStore } from "../store/store";
 import { EchoGuard, contentHash, decideVaultAction } from "./applyChange";
 import { FileMeta } from "../store/model";
-import { SyncRules, shouldSync, isHidden } from "./rules";
+import { SyncRules, shouldSync, isHidden, folderIsExcluded } from "./rules";
 import { listAllFiles } from "./adapterScan";
 import { planHiddenSync } from "./hiddenSync";
 
@@ -216,7 +216,9 @@ export class VaultBridge {
     try {
       try {
         const adapter = this.app.vault.adapter;
-        const allPaths = await listAllFiles(adapter);
+        // Ausgeschlossene Ordner (z. B. node_modules) beim Scan gar nicht erst
+        // betreten — spart bei großen Dev-Ordnern viel Zeit.
+        const allPaths = await listAllFiles(adapter, "", (folder) => !folderIsExcluded(folder, this.rules));
         const local = new Map<string, string>();
         const errored = new Set<string>();
         for (const path of allPaths) {

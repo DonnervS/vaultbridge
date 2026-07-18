@@ -5,13 +5,15 @@ import { runSelfTest } from "../setup/selfTest";
 import { promptPassphrase } from "./PassphrasePromptModal";
 import { GeneratorModal } from "./GeneratorModal";
 import { RotationModal } from "./RotationModal";
-import { DEFAULT_RULES } from "../vault/rules";
+import { DEFAULT_RULES, cloneRules } from "../vault/rules";
 import type { SyncMode } from "../store/syncModes";
 
-const PLUGIN_SYNC_GLOBS = [
-  ".obsidian/plugins/**",
-  ".obsidian/themes/**",
-  ".obsidian/snippets/**",
+// Ordner/Dateien, die der "Plugins & Themes synchronisieren"-Schalter steuert.
+// Aus = diese Pfade werden ausgeschlossen; An = sie syncen (Standard).
+const PLUGIN_SYNC_PATHS = [
+  ".obsidian/plugins",
+  ".obsidian/themes",
+  ".obsidian/snippets",
   ".obsidian/community-plugins.json",
 ];
 
@@ -31,11 +33,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
     // Defensive: Altdaten aus einer Version vor den Regeln könnten `rules`
     // fehlen lassen, obwohl loadSettings() das eigentlich absichert.
     if (!this.plugin.settings.rules) {
-      this.plugin.settings.rules = {
-        ...DEFAULT_RULES,
-        include: [...DEFAULT_RULES.include],
-        exclude: [...DEFAULT_RULES.exclude],
-      };
+      this.plugin.settings.rules = cloneRules(DEFAULT_RULES);
     }
 
     new Setting(containerEl)
@@ -91,9 +89,17 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
 
     containerEl.createEl("h3", { text: "Dateisteuerung" });
 
+    containerEl.createEl("p", {
+      text:
+        "Standardmäßig wird alles synchronisiert — normale Notizen genauso wie " +
+        "versteckte Ordner (z. B. .claude, .hinote). Steuere über die Ausschlüsse, " +
+        "was NICHT syncen soll.",
+      cls: "setting-item-description",
+    });
+
     new Setting(containerEl)
       .setName("Versteckte Dateien synchronisieren")
-      .setDesc("Dotfiles/-ordner (z. B. .claude, .obsidian) gemäß den Regeln unten einbeziehen.")
+      .setDesc("An = Dotfiles/-ordner (.claude, .hinote, .obsidian …) syncen mit. Aus = nur normale Notizen.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.rules.syncHidden).onChange(async (value) => {
           this.plugin.settings.rules.syncHidden = value;
@@ -102,23 +108,12 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Einschließen (eine Glob pro Zeile)")
-      .setDesc("Nur versteckte Pfade, die hier (und nicht in Ausschließen) matchen, werden synchronisiert.")
-      .addTextArea((ta) => {
-        ta.setValue(this.plugin.settings.rules.include.join("\n")).onChange(async (value) => {
-          this.plugin.settings.rules.include = value
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0);
-          await this.plugin.saveSettings();
-        });
-        ta.inputEl.rows = 5;
-        ta.inputEl.style.width = "100%";
-      });
-
-    new Setting(containerEl)
-      .setName("Ausschließen (eine Glob pro Zeile)")
-      .setDesc("Diese Pfade werden nie synchronisiert, auch wenn sie in Einschließen stehen.")
+      .setName("Ausschließen (ein Eintrag pro Zeile)")
+      .setDesc(
+        "Ein Dateipfad (Dev/geheim.md) schließt genau die Datei aus. " +
+          "Ein Ordner (Dev/projekt/node_modules) schließt ihn samt Unterordnern aus. " +
+          "Ein Name ohne Schrägstrich (node_modules) greift überall. Globs (*, **) sind auch erlaubt.",
+      )
       .addTextArea((ta) => {
         ta.setValue(this.plugin.settings.rules.exclude.join("\n")).onChange(async (value) => {
           this.plugin.settings.rules.exclude = value
@@ -127,7 +122,25 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
             .filter((line) => line.length > 0);
           await this.plugin.saveSettings();
         });
-        ta.inputEl.rows = 5;
+        ta.inputEl.rows = 6;
+        ta.inputEl.style.width = "100%";
+      });
+
+    new Setting(containerEl)
+      .setName("Trotzdem synchronisieren (Ausnahmen)")
+      .setDesc(
+        "Selten gebraucht: Pfade, die trotz eines Ausschlusses gesynct werden sollen " +
+          "(z. B. eine einzelne Datei in einem ausgeschlossenen Ordner). Meist leer.",
+      )
+      .addTextArea((ta) => {
+        ta.setValue(this.plugin.settings.rules.include.join("\n")).onChange(async (value) => {
+          this.plugin.settings.rules.include = value
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+          await this.plugin.saveSettings();
+        });
+        ta.inputEl.rows = 3;
         ta.inputEl.style.width = "100%";
       });
 
@@ -135,11 +148,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       .setName("Regeln zurücksetzen")
       .addButton((b) =>
         b.setButtonText("Auf Standard zurücksetzen").onClick(async () => {
-          this.plugin.settings.rules = {
-            ...DEFAULT_RULES,
-            include: [...DEFAULT_RULES.include],
-            exclude: [...DEFAULT_RULES.exclude],
-          };
+          this.plugin.settings.rules = cloneRules(DEFAULT_RULES);
           await this.plugin.saveSettings();
           this.display();
         }),
@@ -152,17 +161,19 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Plugins & Themes synchronisieren")
-      .setDesc("Verteilt Plugin-Code und -Einstellungen über alle Geräte. Vaultbridge selbst wird nie synchronisiert.")
+      .setDesc("An (Standard) verteilt Plugin-Code und -Einstellungen über alle Geräte. Vaultbridge selbst wird nie synchronisiert.")
       .addToggle((t) => {
-        const enabled = PLUGIN_SYNC_GLOBS.every((g) => this.plugin.settings.rules.include.includes(g));
+        const exclude = this.plugin.settings.rules.exclude;
+        const enabled = !PLUGIN_SYNC_PATHS.some((p) => exclude.includes(p));
         t.setValue(enabled).onChange(async (value) => {
-          const include = this.plugin.settings.rules.include;
           if (value) {
-            for (const g of PLUGIN_SYNC_GLOBS) {
-              if (!include.includes(g)) include.push(g);
-            }
+            this.plugin.settings.rules.exclude = this.plugin.settings.rules.exclude.filter(
+              (p) => !PLUGIN_SYNC_PATHS.includes(p),
+            );
           } else {
-            this.plugin.settings.rules.include = include.filter((g) => !PLUGIN_SYNC_GLOBS.includes(g));
+            for (const p of PLUGIN_SYNC_PATHS) {
+              if (!this.plugin.settings.rules.exclude.includes(p)) this.plugin.settings.rules.exclude.push(p);
+            }
           }
           await this.plugin.saveSettings();
           this.display();

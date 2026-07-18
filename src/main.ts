@@ -9,7 +9,7 @@ import { VaultStore } from "./store/store";
 import { startSync, SyncHandle, SyncStatus } from "./store/replication";
 import { EchoGuard } from "./vault/applyChange";
 import { VaultBridge } from "./vault/bridge";
-import { DEFAULT_RULES, SyncRules } from "./vault/rules";
+import { DEFAULT_RULES, SyncRules, migrateRules } from "./vault/rules";
 import { promptPassphrase } from "./ui/PassphrasePromptModal";
 import { ConflictListView, VIEW_TYPE_CONFLICTS } from "./ui/ConflictListView";
 import { SyncMode, shouldReplicateNow } from "./store/syncModes";
@@ -496,11 +496,8 @@ export default class VaultbridgePlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    this.settings.rules = {
-      ...this.settings.rules,
-      include: [...this.settings.rules.include],
-      exclude: [...this.settings.rules.exclude],
-    };
+    // Regeln auf das aktuelle Schema migrieren (v1-Allowlist -> v2 "alles syncen").
+    this.settings.rules = migrateRules(this.settings.rules);
   }
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
