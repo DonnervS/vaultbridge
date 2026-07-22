@@ -5,6 +5,11 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
+// "events" wird NICHT ausgelagert, sondern gebündelt (browserfähiges Polyfill) —
+// muss identisch zur esbuild.config.mjs sein, sonst prüft der Test einen anderen
+// Bundle-Stand als das Release.
+const externalBuiltins = builtins.filter((m) => m !== "events");
+
 const result = await esbuild.build({
   entryPoints: ["src/store/pouch.ts"],
   bundle: true,
@@ -12,10 +17,25 @@ const result = await esbuild.build({
   format: "cjs",
   platform: "browser",
   target: "es2018",
-  external: ["obsidian", "electron", ...builtins],
+  external: ["obsidian", "electron", ...externalBuiltins],
   logLevel: "silent",
 });
 const code = result.outputFiles[0].text;
+
+// Mobile-Guard: auf iOS/Android gibt es kein Node, daher darf im Bundle KEIN
+// require() auf einen Node-Builtin übrig bleiben (nur "obsidian"/"electron" sind
+// von der Laufzeit bereitgestellt). Genau dieser Fall (require("events")) hat das
+// Laden auf dem iPhone verhindert und wurde vom reinen Lade-Test unten nicht
+// erkannt, weil die Node-Sandbox ein funktionierendes require("events") hat.
+const leakedBuiltin = builtins.find((m) => code.includes(`require("${m}")`));
+if (leakedBuiltin) {
+  console.error(
+    `FEHLGESCHLAGEN: Bundle enthält require("${leakedBuiltin}") — dieser Node-Builtin ` +
+      `fehlt auf Mobile und verhindert das Laden. Aus dem external-Filter nehmen und ein ` +
+      `browserfähiges Polyfill bündeln.`,
+  );
+  process.exit(1);
+}
 
 // Sandbox bildet eine Browser-/Electron-Umgebung nach, ABER ohne `global` und
 // `process` — genau die Symbole, deren unbewachte Top-Level-Nutzung die
