@@ -33,6 +33,10 @@ export interface VaultbridgeSettings {
   // Lokal bekannte Passphrase-Epoche (M6): erhöht sich bei jeder Rotation,
   // dient dem Vergleich gegen den im Store abgelegten Epoch-Marker.
   epoch: number;
+  // Beim Start automatisch verbinden, sobald der Workspace bereit ist. Spart den
+  // manuellen Befehl "Vaultbridge: Verbinden". Bei getrennter Passphrase (pp:
+  // "separate") wird diese beim Autostart per Prompt abgefragt.
+  autostart: boolean;
 }
 
 const DEFAULT_SETTINGS: VaultbridgeSettings = {
@@ -44,6 +48,7 @@ const DEFAULT_SETTINGS: VaultbridgeSettings = {
   wifiOnly: false,
   intervalSeconds: 120,
   epoch: 0,
+  autostart: true,
 };
 
 export default class VaultbridgePlugin extends Plugin {
@@ -90,8 +95,9 @@ export default class VaultbridgePlugin extends Plugin {
     this.addSettingTab(new VaultbridgeSettingsTab(this.app, this));
     this.addCommand({ id: "vaultbridge-connect", name: "Vaultbridge: Verbinden", callback: () => this.connect() });
     this.addCommand({ id: "vaultbridge-disconnect", name: "Vaultbridge: Trennen", callback: () => this.disconnect() });
-    // Kein Auto-Connect: der Nutzer startet den Sync über den Befehl
-    // "Vaultbridge: Verbinden" (nötig, weil eine Passphrase abgefragt werden kann).
+    // Autostart (settings.autostart) verbindet am Ende von onload() via
+    // onLayoutReady automatisch. Der manuelle Befehl "Vaultbridge: Verbinden"
+    // bleibt für den Fall, dass Autostart aus ist oder man neu verbinden will.
 
     this.registerView(
       VIEW_TYPE_CONFLICTS,
@@ -110,7 +116,11 @@ export default class VaultbridgePlugin extends Plugin {
     this.addCommand({
       id: "vaultbridge-generate-setup",
       name: "Vaultbridge: Setup-String erzeugen",
-      callback: () => new GeneratorModal(this.app).open(),
+      callback: () =>
+        new GeneratorModal(this.app, async (setupString) => {
+          this.settings.setupString = setupString;
+          await this.saveSettings();
+        }).open(),
     });
     this.addCommand({
       id: "vaultbridge-file-history",
@@ -126,6 +136,15 @@ export default class VaultbridgePlugin extends Plugin {
     // Regelmäßiger Abgleich versteckter Dateien (Dotfiles/.claude/Plugins):
     // diese lösen keine indizierten Vault-Events aus, daher periodisches Polling.
     this.registerInterval(window.setInterval(() => { if (!this.rotating) void this.bridge?.reconcileHidden(); }, 30000));
+
+    // Autostart: nach dem Aufbau des Workspace automatisch verbinden, sofern
+    // aktiviert und ein Setup-String hinterlegt ist. onLayoutReady stellt sicher,
+    // dass der Vault-Adapter bereit ist, bevor die Bridge Dateien liest; feuert
+    // auch dann, wenn der Layout-Aufbau schon abgeschlossen ist (Plugin zur
+    // Laufzeit aktiviert).
+    this.app.workspace.onLayoutReady(() => {
+      if (this.settings.autostart && this.settings.setupString) void this.connect();
+    });
   }
 
   async onunload(): Promise<void> {

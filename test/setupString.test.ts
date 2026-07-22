@@ -31,6 +31,19 @@ describe("setupString", () => {
     expect(decodeSetup(str).db).toBe("vault_abc");
   });
 
+  it("dekodiert trotz internem Zeilenumbruch in der Nutzlast", () => {
+    const str = encodeSetup(samplePayload());
+    const zerrissen = str.slice(0, 30) + "\n" + str.slice(30);
+    expect(decodeSetup(zerrissen).db).toBe("vault_abc");
+  });
+
+  it("nimmt den zuletzt eingefügten String, wenn versehentlich zwei aneinanderhängen", () => {
+    const alt = encodeSetup(samplePayload({ db: "alt_db" }));
+    const neu = encodeSetup(samplePayload({ db: "neu_db" }));
+    // typischer Einfüge-Unfall: alter (evtl. abgeschnittener) String, Umbruch, neuer String
+    expect(decodeSetup(alt + "\n" + neu).db).toBe("neu_db");
+  });
+
   it("wirft bei falschem Präfix", () => {
     expect(() => decodeSetup("qsync1:abc")).toThrow(/Präfix/);
   });

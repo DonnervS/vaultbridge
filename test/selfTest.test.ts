@@ -21,7 +21,8 @@ function payload(): SetupPayload {
 const okFetch = (async (input: any) => {
   const url = String(input);
   const status = url.includes("vault_abc") ? 200 : 200;
-  return { status, ok: true } as Response;
+  // Root-Check verlangt jetzt den CouchDB-Welcome-Body.
+  return { status, ok: true, json: async () => ({ couchdb: "Welcome" }) } as unknown as Response;
 }) as unknown as typeof fetch;
 
 describe("runSelfTest", () => {

@@ -52,10 +52,14 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Setup-String erzeugen")
-      .setDesc("Öffnet einen Generator, der aus Zugangsdaten einen \"vbridge1:\"-String samt QR-Code baut.")
+      .setDesc("Öffnet einen Generator, der aus Zugangsdaten einen \"vbridge1:\"-String samt QR-Code baut. Mit \"Für dieses Gerät übernehmen\" wird er direkt hier eingetragen — kein Kopieren nötig.")
       .addButton((b) =>
         b.setButtonText("Setup-String erzeugen").onClick(() => {
-          new GeneratorModal(this.app).open();
+          new GeneratorModal(this.app, async (setupString) => {
+            this.plugin.settings.setupString = setupString;
+            await this.plugin.saveSettings();
+            this.display(); // Setup-String-Feld mit dem übernommenen Wert aktualisieren
+          }).open();
         }),
       );
 
@@ -182,6 +186,16 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       });
 
     containerEl.createEl("h3", { text: "Synchronisierung" });
+
+    new Setting(containerEl)
+      .setName("Automatisch verbinden")
+      .setDesc("Beim Start von Obsidian automatisch verbinden. Aus = nur über den Befehl \"Vaultbridge: Verbinden\".")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.autostart).onChange(async (value) => {
+          this.plugin.settings.autostart = value;
+          await this.plugin.saveSettings();
+        }),
+      );
 
     new Setting(containerEl)
       .setName("Sync-Modus")

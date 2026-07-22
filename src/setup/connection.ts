@@ -23,6 +23,26 @@ export async function testConnection(
   if (!root.ok) {
     return { ok: false, step: "url", message: `Unerwartete Serverantwort: HTTP ${root.status}.` };
   }
+  // Bestätigen, dass hinter der URL wirklich die CouchDB-API sitzt: die Wurzel
+  // liefert {"couchdb":"Welcome"}. Fängt den häufigsten Konfigurationsfehler ab,
+  // die Fauxton-Weboberfläche (…/_utils) statt der Server-Wurzel einzutragen —
+  // die antwortet mit HTTP 200 + HTML und würde sonst fälschlich als "ok"
+  // durchgehen (der DB-Check darunter liefert dann 404 und meldete "DB wird
+  // angelegt", also grün trotz falscher URL).
+  let welcome: unknown;
+  try {
+    welcome = await root.json();
+  } catch {
+    welcome = null;
+  }
+  if (!welcome || (welcome as { couchdb?: unknown }).couchdb !== "Welcome") {
+    return {
+      ok: false,
+      step: "url",
+      message:
+        "Antwort ist keine CouchDB-API. Zeigt die URL evtl. auf die Weboberfläche (…/_utils) statt auf die Server-Wurzel (z. B. http://host:5984)?",
+    };
+  }
 
   const dbUrl = rootUrl + encodeURIComponent(payload.db);
   let db: Response;

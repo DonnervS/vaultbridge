@@ -23,7 +23,13 @@ export class GeneratorModal extends Modal {
 
   private outputEl!: HTMLElement;
 
-  constructor(app: App) {
+  /**
+   * @param onApply Optional: wird der Generator aus den Plugin-Einstellungen (oder
+   *   dem Befehl) geöffnet, übernimmt dieser Callback den erzeugten String direkt
+   *   in die eigene Konfiguration — so entfällt das fehleranfällige Kopieren/
+   *   Einfügen in das Setup-String-Feld.
+   */
+  constructor(app: App, private readonly onApply?: (setupString: string) => void | Promise<void>) {
     super(app);
   }
 
@@ -127,6 +133,26 @@ export class GeneratorModal extends Modal {
     ta.style.width = "100%";
     ta.addEventListener("focus", () => ta.select());
 
+    // Aus den Einstellungen geöffnet: String direkt für DIESES Gerät übernehmen,
+    // statt ihn zu kopieren und ins Setup-Feld einzufügen (dort ist zuletzt beim
+    // Einfügen ein zweiter String an den alten geraten -> undekodierbar).
+    if (this.onApply) {
+      new Setting(out).addButton((b) =>
+        b
+          .setButtonText("Für dieses Gerät übernehmen")
+          .setCta()
+          .onClick(async () => {
+            try {
+              await this.onApply!(str);
+              new Notice("Setup-String für dieses Gerät übernommen.");
+              this.close();
+            } catch (e) {
+              new Notice(`Übernehmen fehlgeschlagen: ${String(e)}`);
+            }
+          }),
+      );
+    }
+
     new Setting(out).addButton((b) =>
       b.setButtonText("In Zwischenablage kopieren").onClick(async () => {
         try {
@@ -143,10 +169,31 @@ export class GeneratorModal extends Modal {
 
     out.createEl("h4", { text: "QR-Code" });
     try {
-      const dataUrl = await QRCode.toDataURL(str, { margin: 1, width: 256 });
+      // In höherer Auflösung erzeugen (gut zum Teilen/Drucken/Abscannen), in der
+      // Anzeige aber kleiner skalieren.
+      const dataUrl = await QRCode.toDataURL(str, { margin: 1, width: 512 });
       const img = out.createEl("img");
       img.src = dataUrl;
       img.style.display = "block";
+      img.style.width = "256px";
+      img.style.maxWidth = "100%";
+
+      // QR-Code als PNG-Datei speichern, damit er an ein anderes Gerät
+      // weitergegeben werden kann. ACHTUNG: Der QR enthält denselben
+      // Setup-String samt Zugangsdaten/Passphrase — wie ein Passwort behandeln.
+      new Setting(out).addButton((b) =>
+        b.setButtonText("QR-Code speichern (PNG)").onClick(() => {
+          try {
+            const a = document.createElement("a");
+            a.href = dataUrl;
+            a.download = "vaultbridge-setup-qr.png";
+            a.click();
+            new Notice("QR-Code gespeichert. Enthält Zugangsdaten — wie ein Passwort behandeln.");
+          } catch (e) {
+            new Notice(`QR-Code speichern fehlgeschlagen: ${String(e)}`);
+          }
+        }),
+      );
     } catch (e) {
       out.createEl("p", { text: `QR-Code konnte nicht erzeugt werden: ${String(e)}` });
     }
