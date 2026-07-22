@@ -81,16 +81,24 @@
   user-select: none;
   border-right: 1px solid var(--background-modifier-border);
 }
-.vb-sign { flex: 0 0 1.4em; text-align: center; user-select: none; }
 .vb-code { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; padding-right: 8px; }
 
-/* Zeilen-Farben: entfernt (rot), hinzugefügt (grün), leer (schraffiert) */
-.vb-del { background: rgba(248, 81, 73, 0.15); }
-.vb-del .vb-sign { color: #f85149; }
-.vb-add { background: rgba(63, 185, 80, 0.15); }
-.vb-add .vb-sign { color: #3fb950; }
-.vb-empty { background: var(--background-secondary-alt); opacity: 0.5; }
 .vb-eq .vb-code { color: var(--text-muted); }
+.vb-empty { background: var(--background-secondary-alt); opacity: 0.5; }
+
+/* Vergleich (nur ansehen): unterschiedliche Zeilen NEUTRAL markieren — bewusst
+   kein rot/grün, damit es nicht wie „gelöscht/neu" wirkt (es ist eine Wahl). */
+.vb-diff:not(.vb-interactive) .vb-chg { background: rgba(210, 160, 30, 0.13); }
+
+/* Zusammenführen: die Farbe zeigt die KONSEQUENZ der Wahl —
+   gewählte Seite grün (wird behalten), andere Seite rot + durchgestrichen
+   (wird verworfen). */
+.vb-interactive .vb-hunk[data-chosen="local"] .vb-pane-l.vb-chg,
+.vb-interactive .vb-hunk[data-chosen="remote"] .vb-pane-r.vb-chg { background: rgba(63, 185, 80, 0.20); }
+.vb-interactive .vb-hunk[data-chosen="local"] .vb-pane-r.vb-chg,
+.vb-interactive .vb-hunk[data-chosen="remote"] .vb-pane-l.vb-chg { background: rgba(248, 81, 73, 0.13); }
+.vb-interactive .vb-hunk[data-chosen="local"] .vb-pane-r.vb-chg .vb-code,
+.vb-interactive .vb-hunk[data-chosen="remote"] .vb-pane-l.vb-chg .vb-code { text-decoration: line-through; opacity: 0.65; }
 
 /* Änderungsblock mit Seiten-Auswahl */
 .vb-hunk { border: 1px solid var(--background-modifier-border); border-radius: 6px; margin: 8px; overflow: hidden; }
@@ -106,13 +114,11 @@
 }
 .vb-hunk-label { color: var(--text-muted); margin-right: auto; }
 
-/* gewählte Seite hervorheben, andere dimmen */
-.vb-hunk[data-chosen="local"] .vb-pane-r { opacity: 0.35; }
-.vb-hunk[data-chosen="remote"] .vb-pane-l { opacity: 0.35; }
+/* aktive Wahl am Umschalt-Button hervorheben */
 .vb-hunk[data-chosen="local"] .vb-btn-local,
 .vb-hunk[data-chosen="remote"] .vb-btn-remote { outline: 2px solid var(--interactive-accent); }
 
-.vb-btn-local { border-left: 3px solid #f85149; }
+.vb-btn-local { border-left: 3px solid #3fb950; }
 .vb-btn-remote { border-left: 3px solid #3fb950; }
 
 /* --- Merge-Vorschau (zusammengeführte Endfassung) --- */

@@ -80,12 +80,6 @@ export default class VaultbridgePlugin extends Plugin {
   // gleichzeitige store.rotate()-Aufrufe mit unterschiedlichen Schlüsseln
   // würden den Store beschädigen.
   private rotating = false;
-  // Einmaliger Store→Vault-Nachlauf pro Verbindung: nach dem ersten Settle
-  // (Erst-Pull abgeschlossen, alle Chunks da) alle bereits replizierten Notizen
-  // in den Vault schreiben — sonst blieben auf einem nur lesenden Gerät die
-  // gepullten Dateien unsichtbar, weil der Live-Feed (since:'now') sie nicht
-  // (mehr) abbildet. Wird in connect() zurückgesetzt.
-  private materializedThisConnect = false;
   // Aktuell im Diff-Bereich (ConflictDiffView) geöffneter Konflikt. Von der
   // Liste (rechts) gesetzt, von der Diff-View (Mitte) gelesen.
   private activeConflictId: string | null = null;
@@ -94,23 +88,16 @@ export default class VaultbridgePlugin extends Plugin {
   private readonly onSyncStatus = (s: SyncStatus, info?: string): void => {
     this.statusBar.setStatus(s, info);
     if (s === "idle" || s === "paused") {
-      void this.maybeMaterialize();
+      // Bei JEDEM Settle nachziehen (nicht nur einmal): der Pull kommt in Schüben,
+      // und Notizen, deren Chunks in einem früheren Schub noch fehlten, werden erst
+      // in einer späteren Runde dekodierbar. reconcileFromStore ist nach dem ersten
+      // vollständigen Durchlauf billig (nur neue/verpasste IDs).
+      void this.bridge?.reconcileFromStore();
       void this.refreshConflicts();
       void this.bridge?.reconcileHidden();
       void this.checkAdoption();
     }
   };
-
-  /**
-   * Führt den Store→Vault-Nachlauf genau einmal pro Verbindung aus (nach dem
-   * ersten Settle). Idempotent und modusübergreifend (live wie interval/manuell),
-   * daher über das Flag entkoppelt statt an einen einzelnen Sync-Pfad gebunden.
-   */
-  private async maybeMaterialize(): Promise<void> {
-    if (this.materializedThisConnect) return;
-    this.materializedThisConnect = true;
-    await this.bridge?.reconcileFromStore();
-  }
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -198,7 +185,6 @@ export default class VaultbridgePlugin extends Plugin {
 
   async connect(): Promise<void> {
     this.disconnect(); // vorherige Verbindung sauber beenden (re-entrant-sicher)
-    this.materializedThisConnect = false; // Store→Vault-Nachlauf gilt pro Verbindung neu
     try {
       const payload = decodeSetup(this.settings.setupString);
       let passphrase = payload.passphrase ?? "";
@@ -380,7 +366,7 @@ export default class VaultbridgePlugin extends Plugin {
         if (s === "idle" || s === "error") resolve();
       });
     });
-    await this.maybeMaterialize();
+    await this.bridge?.reconcileFromStore();
     await this.bridge?.reconcileHidden();
     void this.refreshConflicts();
   }
