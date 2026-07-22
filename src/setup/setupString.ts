@@ -30,12 +30,22 @@ export function encodeSetup(payload: SetupPayload): string {
 
 export function decodeSetup(str: string): SetupPayload {
   const s = str.trim();
-  if (!s.startsWith(PREFIX)) {
+  // Ab dem LETZTEN "vbridge1:" lesen statt nur den Anfang zu prüfen: fängt den
+  // häufigen Einfüge-Unfall ab, bei dem ein neuer String versehentlich an einen
+  // alten gehängt wird ("…alterString\nvbridge1:neuerString") — dann gewinnt der
+  // zuletzt eingefügte. Ignoriert außerdem vorangestellten Text.
+  const idx = s.lastIndexOf(PREFIX);
+  if (idx < 0) {
     throw new Error("Kein gültiger Vaultbridge-Setup-String: Präfix \"vbridge1:\" fehlt.");
   }
+  // Alle Whitespaces aus der base64url-Nutzlast entfernen: ein durch einen
+  // Zeilenumbruch zerrissener String (z. B. beim Einfügen in ein mehrzeiliges
+  // Feld) soll trotzdem dekodieren. Das base64url-Alphabet enthält keinen
+  // Whitespace, das Entfernen ist also verlustfrei.
+  const raw = s.slice(idx + PREFIX.length).replace(/\s+/g, "");
   let obj: any;
   try {
-    obj = JSON.parse(utf8.decode(base64urlToBytes(s.slice(PREFIX.length))));
+    obj = JSON.parse(utf8.decode(base64urlToBytes(raw)));
   } catch {
     throw new Error("Setup-String beschädigt: Nutzlast konnte nicht dekodiert werden.");
   }

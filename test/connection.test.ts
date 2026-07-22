@@ -3,13 +3,25 @@ import { testConnection } from "../src/setup/connection";
 
 const base = { couchUrl: "https://couch.example:6984/", db: "vault_abc", user: "u", pass: "p" };
 
-function fakeFetch(map: Record<string, { status: number; ok?: boolean }>): typeof fetch {
+// 2xx-Antworten liefern per Default den CouchDB-Welcome-Body, den testConnection
+// auf der Wurzel jetzt verlangt. Über `body` überschreibbar (z. B. Fauxton-HTML
+// simulieren, das keinen Welcome enthält).
+function fakeFetch(map: Record<string, { status: number; body?: unknown }>): typeof fetch {
   return (async (input: any) => {
     const url = String(input);
     for (const key of Object.keys(map)) {
       if (url.includes(key)) {
-        const { status } = map[key];
-        return { status, ok: status >= 200 && status < 300 } as Response;
+        const { status, body } = map[key];
+        const ok = status >= 200 && status < 300;
+        const payload = body !== undefined ? body : ok ? { couchdb: "Welcome" } : {};
+        return {
+          status,
+          ok,
+          json: async () => {
+            if (payload === "__notjson__") throw new Error("kein JSON");
+            return payload;
+          },
+        } as unknown as Response;
       }
     }
     throw new Error("unerwartete URL: " + url);
@@ -69,11 +81,24 @@ describe("testConnection", () => {
     let calls = 0;
     const fetchFn = (async () => {
       calls++;
-      if (calls === 1) return { status: 200, ok: true } as Response;
+      if (calls === 1) return { status: 200, ok: true, json: async () => ({ couchdb: "Welcome" }) } as unknown as Response;
       throw new Error("Verbindung verloren");
     }) as unknown as typeof fetch;
     const r = await testConnection(base, fetchFn);
     expect(r.ok).toBe(false);
     expect(r.step).toBe("db");
+  });
+
+  it("meldet url-Fehler, wenn die Root keine CouchDB-Welcome liefert (z. B. /_utils gibt JSON ohne Welcome)", async () => {
+    const r = await testConnection(base, fakeFetch({ "6984/": { status: 200, body: { fauxton: true } } }));
+    expect(r.ok).toBe(false);
+    expect(r.step).toBe("url");
+    expect(r.message).toMatch(/_utils|CouchDB-API/);
+  });
+
+  it("meldet url-Fehler, wenn die Root gar kein JSON liefert (Fauxton-HTML)", async () => {
+    const r = await testConnection(base, fakeFetch({ "6984/": { status: 200, body: "__notjson__" } }));
+    expect(r.ok).toBe(false);
+    expect(r.step).toBe("url");
   });
 });
