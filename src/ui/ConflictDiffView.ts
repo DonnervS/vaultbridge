@@ -12,8 +12,6 @@ export const VIEW_TYPE_CONFLICT_DIFF = "vaultbridge-conflict-diff";
  * zurückgesetzt.
  */
 export class ConflictDiffView extends ItemView {
-  private applyWhole: ((side: "local" | "remote") => void) | null = null;
-
   constructor(
     leaf: WorkspaceLeaf,
     private readonly getStore: () => VaultStore | null,
@@ -33,7 +31,6 @@ export class ConflictDiffView extends ItemView {
     const root = this.contentEl;
     root.empty();
     root.addClass("vb-cv-detail");
-    this.applyWhole = null;
 
     const store = this.getStore();
     if (!store) { root.createEl("p", { cls: "vb-cv-hint", text: "Nicht verbunden." }); return; }
@@ -65,30 +62,95 @@ export class ConflictDiffView extends ItemView {
       cls: "vb-cv-note",
       text: identical
         ? "Beide Versionen sind inhaltlich identisch — „Konflikt auflösen“ genügt (es geht nichts verloren)."
-        : "„Aktuell“ ist die derzeit gültige Version, „Konflikt“ die abweichende. Wähle nach dem Inhalt, nicht nach dem Gerät.",
+        : conflict.isBinary
+          ? "Binärdatei — wähle unten, welche Version behalten werden soll."
+          : "Unten kannst du komplett eine Seite übernehmen — oder pro Abschnitt eine Seite wählen und beide zu einer Fassung zusammenführen.",
     });
 
     const body = root.createDiv({ cls: "vb-cv-body" });
-    if (conflict.isBinary) {
-      this.renderBinary(body, session, conflict);
-    } else if (identical) {
-      body.createDiv({ cls: "vb-cv-identical", text: "Kein inhaltlicher Unterschied zwischen den beiden Versionen." });
-    } else {
-      this.renderDiff(body, session);
-    }
-
     const footer = root.createDiv({ cls: "vb-cv-footer" });
+
+    // Binärdatei: nur ganze Seite übernehmen (kein Textmerge).
+    if (conflict.isBinary) {
+      this.renderBinary(body, conflict);
+      footer.createEl("button", { cls: "vb-btn-local", text: "⬅ Ganz „Aktuell“ behalten" })
+        .onclick = () => void this.saveWhole(store, conflict, session, "local");
+      footer.createEl("button", { cls: "vb-btn-remote", text: "Ganz „Konflikt“ übernehmen ➡" })
+        .onclick = () => void this.saveWhole(store, conflict, session, "remote");
+      return;
+    }
+    // Inhaltlich identisch: ein Klick genügt.
     if (identical) {
+      body.createDiv({ cls: "vb-cv-identical", text: "Kein inhaltlicher Unterschied zwischen den beiden Versionen." });
       const resolve = footer.createEl("button", { text: "Konflikt auflösen" });
       resolve.addClass("mod-cta");
-      resolve.onclick = () => void this.save(store, conflict, session);
-    } else {
-      footer.createEl("button", { cls: "vb-btn-local", text: "⬅ Ganz „Aktuell“" }).onclick = () => this.applyWhole?.("local");
-      footer.createEl("button", { cls: "vb-btn-remote", text: "Ganz „Konflikt“ ➡" }).onclick = () => this.applyWhole?.("remote");
-      const save = footer.createEl("button", { text: "Zusammenführen & speichern" });
-      save.addClass("mod-cta");
-      save.onclick = () => void this.save(store, conflict, session);
+      resolve.onclick = () => void this.saveWhole(store, conflict, session, "local");
+      return;
     }
+
+    // Textkonflikt mit Unterschieden. Zwei Schritte, umschaltbar ohne die
+    // getroffene Auswahl (session.decisions) zu verlieren — deshalb nur body+
+    // footer neu befüllen statt die ganze View (samt session) neu zu bauen:
+    //  1. Auswahl: Side-by-Side, pro Abschnitt eine Seite wählen. „Ganz Aktuell“/
+    //     „Ganz Konflikt“ übernehmen sofort komplett eine Seite.
+    //  2. Vorschau: die zusammengeführte Endfassung ansehen und übernehmen.
+    const showDiff = (): void => {
+      body.empty(); footer.empty();
+      this.renderDiff(body, session);
+      footer.createEl("button", { cls: "vb-btn-local", text: "⬅ Ganz „Aktuell“ behalten" })
+        .onclick = () => void this.saveWhole(store, conflict, session, "local");
+      footer.createEl("button", { cls: "vb-btn-remote", text: "Ganz „Konflikt“ übernehmen ➡" })
+        .onclick = () => void this.saveWhole(store, conflict, session, "remote");
+      const preview = footer.createEl("button", { text: "Zusammenführen (Vorschau) →" });
+      preview.addClass("mod-cta");
+      preview.onclick = () => showPreview();
+    };
+    const showPreview = (): void => {
+      body.empty(); footer.empty();
+      this.renderMergePreview(body, session);
+      footer.createEl("button", { text: "← Zurück zur Auswahl" }).onclick = () => showDiff();
+      const apply = footer.createEl("button", { text: "✓ Diese Fassung übernehmen & speichern" });
+      apply.addClass("mod-cta");
+      apply.onclick = () => void this.save(store, conflict, session);
+    };
+    showDiff();
+  }
+
+  /**
+   * Vorschau der zusammengeführten Endfassung: die tatsächlich resultierende
+   * Datei Zeile für Zeile, wobei aus einem Konfliktabschnitt übernommene Zeilen
+   * farblich markiert sind (Aktuell/Konflikt). So sieht man vor dem Speichern,
+   * was herauskommt.
+   */
+  private renderMergePreview(root: HTMLElement, session: ConflictSession): void {
+    root.createDiv({
+      cls: "vb-merge-note",
+      text: "Vorschau der zusammengeführten Datei. Markierte Zeilen stammen aus einem Konfliktabschnitt (blau = Aktuell, grün = Konflikt).",
+    });
+    const table = root.createDiv({ cls: "vb-merge" });
+    const strip = (s: string): string => s.replace(/\n$/, "");
+    let n = 0;
+    for (const line of session.mergePreview()) {
+      n++;
+      const row = table.createDiv({ cls: `vb-mrow vb-from-${line.origin}` });
+      row.createSpan({ cls: "vb-ln", text: String(n) });
+      row.createSpan({
+        cls: "vb-tag",
+        text: line.origin === "local" ? "Aktuell" : line.origin === "remote" ? "Konflikt" : "",
+      });
+      row.createSpan({ cls: "vb-code", text: strip(line.text) });
+    }
+  }
+
+  /** Komplett eine Seite übernehmen und sofort speichern. */
+  private async saveWhole(
+    store: VaultStore,
+    conflict: { id: string; path: string; local: { meta: import("../store/model").FileMeta } },
+    session: ConflictSession,
+    side: "local" | "remote",
+  ): Promise<void> {
+    session.takeWhole(side);
+    await this.save(store, conflict, session);
   }
 
   private async save(
@@ -121,7 +183,6 @@ export class ConflictDiffView extends ItemView {
     let lnLocal = 0;
     let lnRemote = 0;
     let changeIdx = 0;
-    const hunkMarks: Array<(side: "local" | "remote") => void> = [];
     const strip = (s: string): string => s.replace(/\n$/, "");
 
     const addRow = (
@@ -157,7 +218,6 @@ export class ConflictDiffView extends ItemView {
       const pick = (chosen: "local" | "remote") => { block.dataset.chosen = chosen; };
       bar.createEl("button", { cls: "vb-btn-local", text: "⬅ Aktuell" }).onclick = () => { session.setDecision(idx, "local"); pick("local"); };
       bar.createEl("button", { cls: "vb-btn-remote", text: "Konflikt ➡" }).onclick = () => { session.setDecision(idx, "remote"); pick("remote"); };
-      hunkMarks.push(pick);
 
       const rows = block.createDiv({ cls: "vb-hunk-rows" });
       const max = Math.max(hunk.local.length, hunk.remote.length);
@@ -173,33 +233,19 @@ export class ConflictDiffView extends ItemView {
         );
       }
     }
-
-    this.applyWhole = (side) => {
-      session.takeWhole(side);
-      hunkMarks.forEach((m) => m(side));
-    };
   }
 
   private renderBinary(
     root: HTMLElement,
-    session: ConflictSession,
     conflict: { local: { bytes: Uint8Array }; remotes: { bytes: Uint8Array }[] },
   ): void {
-    root.createEl("p", { text: "Binärdatei — kein Textvergleich möglich. Version wählen:" });
     const cards = root.createDiv({ cls: "vb-binary" });
-    const local = cards.createDiv({ cls: "vb-card vb-chosen" });
+    const local = cards.createDiv({ cls: "vb-card" });
     local.createEl("b", { text: "Aktuell (gültig)" });
     local.createEl("div", { text: `${conflict.local.bytes.length} Bytes` });
     const remote = cards.createDiv({ cls: "vb-card" });
     remote.createEl("b", { text: "Konfliktversion" });
     remote.createEl("div", { text: `${conflict.remotes[0].bytes.length} Bytes` });
-    local.onclick = () => { session.takeWhole("local"); local.addClass("vb-chosen"); remote.removeClass("vb-chosen"); };
-    remote.onclick = () => { session.takeWhole("remote"); remote.addClass("vb-chosen"); local.removeClass("vb-chosen"); };
-    this.applyWhole = (side) => {
-      session.takeWhole(side);
-      local.toggleClass("vb-chosen", side === "local");
-      remote.toggleClass("vb-chosen", side === "remote");
-    };
   }
 
   async onClose(): Promise<void> {

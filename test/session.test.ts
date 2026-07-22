@@ -32,6 +32,25 @@ describe("ConflictSession", () => {
     expect(utf8.decode(s.resultBytes())).toBe("a\nB2\nc");
   });
 
+  it("mergePreview markiert übernommene Zeilen mit ihrer Herkunft", () => {
+    const s = new ConflictSession(input());
+    // Default (lokal): Kontextzeilen a,c; geänderte Zeile b aus "local".
+    // Zeilen behalten ihr abschließendes \n (nur die letzte Datei-Zeile nicht).
+    expect(s.mergePreview()).toEqual([
+      { text: "a\n", origin: "context" },
+      { text: "b\n", origin: "local" },
+      { text: "c", origin: "context" },
+    ]);
+    s.setDecision(0, "remote");
+    expect(s.mergePreview()).toEqual([
+      { text: "a\n", origin: "context" },
+      { text: "B2\n", origin: "remote" },
+      { text: "c", origin: "context" },
+    ]);
+    // Vorschau und tatsächliches Ergebnis müssen übereinstimmen.
+    expect(s.mergePreview().map((l) => l.text).join("")).toBe(utf8.decode(s.resultBytes()));
+  });
+
   it("Binär: keine Hunks, Ergebnis = gewählte Seite", () => {
     const s = new ConflictSession(
       input({ isBinary: true, local: { rev: "2-a", bytes: new Uint8Array([1, 2]) }, remote: { rev: "2-b", bytes: new Uint8Array([9]) } }),

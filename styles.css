@@ -115,6 +115,36 @@
 .vb-btn-local { border-left: 3px solid #f85149; }
 .vb-btn-remote { border-left: 3px solid #3fb950; }
 
+/* --- Merge-Vorschau (zusammengeführte Endfassung) --- */
+.vb-merge-note {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.vb-merge { font-family: var(--font-monospace); font-size: 0.82em; }
+.vb-mrow { display: flex; align-items: stretch; border-left: 3px solid transparent; }
+.vb-mrow .vb-ln {
+  flex: 0 0 3.2em;
+  text-align: right;
+  padding: 0 6px;
+  color: var(--text-faint);
+  user-select: none;
+  border-right: 1px solid var(--background-modifier-border);
+}
+.vb-mrow .vb-tag {
+  flex: 0 0 5.5em;
+  padding: 0 6px;
+  font-family: var(--font-interface);
+  font-size: 0.82em;
+  color: var(--text-muted);
+  user-select: none;
+}
+.vb-mrow .vb-code { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; padding-right: 8px; }
+.vb-from-local { background: rgba(56, 139, 253, 0.12); border-left-color: #388bfd; }
+.vb-from-remote { background: rgba(63, 185, 80, 0.12); border-left-color: #3fb950; }
+.vb-from-context .vb-tag { color: var(--text-faint); }
+
 /* --- Binärdatei-Auswahl (unverändert) --- */
 .vb-binary { display: flex; gap: 12px; padding: 12px; }
 .vb-card { border: 1px solid var(--background-modifier-border); padding: 12px; cursor: pointer; border-radius: 6px; }

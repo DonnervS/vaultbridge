@@ -39,6 +39,27 @@ export class ConflictSession {
     return utf8.encode(mergedText(this.hunks, this.decisions));
   }
 
+  /**
+   * Zeilen der zusammengeführten Endfassung mit Herkunft — Grundlage der
+   * Merge-Vorschau. "context" = unveränderte Zeile (in beiden gleich), "local"/
+   * "remote" = aus einem Änderungsblock übernommene Zeile (je nach aktueller
+   * Entscheidung). Nutzt dieselbe Auswahllogik wie resultBytes()/mergedText().
+   */
+  mergePreview(): Array<{ text: string; origin: "context" | "local" | "remote" }> {
+    const out: Array<{ text: string; origin: "context" | "local" | "remote" }> = [];
+    let changeIdx = 0;
+    for (const h of this.hunks) {
+      if (h.kind === "equal") {
+        for (const line of h.lines) out.push({ text: line, origin: "context" });
+      } else {
+        const choice = this.decisions[changeIdx] ?? "local";
+        for (const line of choice === "local" ? h.local : h.remote) out.push({ text: line, origin: choice });
+        changeIdx++;
+      }
+    }
+    return out;
+  }
+
   pruneRev(): string {
     return this.input.remote.rev;
   }
