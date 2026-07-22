@@ -98,6 +98,55 @@ export class VaultBridge {
     }
   }
 
+  /**
+   * Materialisiert ALLE Notizen aus dem Store in den Vault. Nötig für (auch nur
+   * zeitweise) lesende Geräte: `store.subscribe` liefert per `since:'now'` nur
+   * Änderungen AB Feed-Start. Bereits replizierte Docs — etwa nach einem
+   * Reconnect oder App-Neustart, oder wenn der Erst-Pull vor dem Feed-Start
+   * abgeschlossen war — erzeugen keinen neuen Change und würden ohne diesen
+   * Nachlauf nie zu Dateien. Idempotent: applyRemote schreibt nur bei
+   * Hash-Unterschied, überspringt bereits identische Dateien.
+   */
+  async reconcileFromStore(): Promise<void> {
+    let ids: string[];
+    try {
+      ids = await this.store.listNoteIds();
+    } catch (e) {
+      new Notice(`Vaultbridge: Store→Vault-Abgleich fehlgeschlagen: ${String(e)}`);
+      return;
+    }
+
+    // Früh-Diagnose Schlüssel-Mismatch: liegen Notizen vor, lässt sich aber eine
+    // Stichprobe nicht entschlüsseln, passt der Setup-String/die Passphrase NICHT
+    // zu diesen Daten. Genau dieser Fall sieht sonst wie „Selbsttest grün, aber
+    // nichts passiert" aus, weil der Selbsttest nur den LOKALEN Krypto-Roundtrip
+    // prüft — nicht, ob der Schlüssel zu den Daten im Sync passt. „Irgendeine aus
+    // der Stichprobe entschlüsselbar" ist robust gegen einen noch unvollständigen
+    // Pull (fehlende Chunks): vollständig gepullte Notizen dekodieren, teils
+    // gepullte nicht — es reicht ein Treffer.
+    if (ids.length > 0) {
+      let anyDecodable = false;
+      for (const id of ids.slice(0, Math.min(8, ids.length))) {
+        try {
+          if (await this.store.readNote(id)) { anyDecodable = true; break; }
+        } catch { /* nächster Kandidat */ }
+      }
+      if (!anyDecodable) {
+        new Notice(
+          "Vaultbridge: Es liegen synchronisierte Daten vor, aber keine ließ sich entschlüsseln. " +
+            "Passphrase/Setup-String passt nicht zu diesen Daten — auf allen Geräten muss derselbe " +
+            "Setup-String verwendet werden.",
+          15000,
+        );
+        return; // ohne passenden Schlüssel bringt das Materialisieren nichts
+      }
+    }
+
+    for (const id of ids) {
+      await this.applyRemote(id);
+    }
+  }
+
   private async applyRemote(id: string): Promise<void> {
     try {
       const note = await this.store.readNote(id);

@@ -11,7 +11,11 @@ export class StatusBar {
   private lastLabel = "⚪ Vaultbridge: inaktiv";
   private conflicts = 0;
 
-  constructor(private readonly el: HTMLElement) {
+  /**
+   * @param onConflictClick Klick auf das Konflikt-Badge (öffnet die
+   *   Konflikt-Ansicht). Ohne Callback bleibt das Badge nicht klickbar.
+   */
+  constructor(private readonly el: HTMLElement, private readonly onConflictClick?: () => void) {
     this.render();
   }
 
@@ -32,7 +36,18 @@ export class StatusBar {
   }
 
   private render(): void {
-    const badge = this.conflicts > 0 ? `  ⚠️ ${this.conflicts} Konflikt${this.conflicts === 1 ? "" : "e"}` : "";
-    this.el.setText(this.lastLabel + badge);
+    this.el.empty();
+    this.el.createSpan({ text: this.lastLabel });
+    if (this.conflicts > 0) {
+      const badge = this.el.createSpan({
+        cls: "vb-status-conflicts",
+        text: `⚠️ ${this.conflicts} Konflikt${this.conflicts === 1 ? "" : "e"}`,
+      });
+      if (this.onConflictClick) {
+        badge.addClass("vb-clickable");
+        badge.setAttr("aria-label", "Konflikte anzeigen");
+        badge.onclick = () => this.onConflictClick!();
+      }
+    }
   }
 }

@@ -1,13 +1,125 @@
-/* Vaultbridge – Styles folgen in späteren Meilensteinen (Diff-View etc.) */
+/* Vaultbridge – Konflikt-Ansicht (Master-Detail) + GitHub-artiger Diff */
 
-.vb-diff-row { display: flex; gap: 8px; border-bottom: 1px solid var(--background-modifier-border); }
-.vb-col { flex: 1; white-space: pre-wrap; padding: 4px; font-family: var(--font-monospace); }
-.vb-change .vb-local { background: rgba(255,0,0,0.08); }
-.vb-change .vb-remote { background: rgba(0,128,0,0.08); }
-.vb-col.vb-chosen { outline: 2px solid var(--interactive-accent); }
-.vb-conflict-footer { display: flex; gap: 8px; margin-top: 12px; }
-.vb-binary { display: flex; gap: 12px; }
+/* Klickbares Konflikt-Badge in der Statusleiste */
+.vb-status-conflicts { margin-left: 8px; }
+.vb-status-conflicts.vb-clickable { cursor: pointer; text-decoration: underline dotted; }
+.vb-status-conflicts.vb-clickable:hover { color: var(--text-accent); }
+
+/* Master-Detail-Grundgerüst: volle Breite im Haupt-Editorbereich */
+.vb-cv { display: flex; height: 100%; overflow: hidden; }
+
+.vb-cv-list {
+  flex: 0 0 260px;
+  border-right: 1px solid var(--background-modifier-border);
+  overflow-y: auto;
+  padding: 8px;
+}
+.vb-cv-list-head { font-weight: 600; margin-bottom: 8px; padding: 0 4px; }
+.vb-cv-empty, .vb-cv-hint { color: var(--text-muted); padding: 8px; }
+.vb-cv-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 2px;
+  cursor: pointer;
+  color: var(--text-normal);
+  white-space: normal;
+  word-break: break-word;
+  box-shadow: none;
+}
+.vb-cv-item:hover { background: var(--background-modifier-hover); }
+.vb-cv-item.vb-cv-active { background: var(--background-modifier-active-hover); font-weight: 600; }
+
+.vb-cv-detail { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.vb-cv-detail-head { padding: 10px 14px; border-bottom: 1px solid var(--background-modifier-border); }
+.vb-cv-path { font-weight: 700; font-size: 1.05em; word-break: break-all; }
+.vb-cv-note { color: var(--text-muted); font-size: 0.85em; margin-top: 4px; }
+.vb-cv-body { flex: 1 1 auto; overflow: auto; }
+
+.vb-cv-footer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--background-modifier-border);
+  flex-wrap: wrap;
+}
+
+/* --- GitHub-artiger Side-by-Side-Diff --- */
+.vb-diff { font-family: var(--font-monospace); font-size: 0.82em; }
+
+.vb-diff-head {
+  display: flex;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-family: var(--font-interface);
+  font-size: 0.9em;
+  font-weight: 600;
+}
+.vb-diff-head-cell { flex: 1 1 0; padding: 6px 10px; min-width: 0; }
+.vb-diff-head-cell.vb-side-local { border-right: 1px solid var(--background-modifier-border); }
+
+.vb-drow { display: flex; align-items: stretch; }
+.vb-pane { flex: 1 1 0; display: flex; min-width: 0; }
+.vb-pane-l { border-right: 1px solid var(--background-modifier-border); }
+
+.vb-ln {
+  flex: 0 0 3.2em;
+  text-align: right;
+  padding: 0 6px;
+  color: var(--text-faint);
+  user-select: none;
+  border-right: 1px solid var(--background-modifier-border);
+}
+.vb-sign { flex: 0 0 1.4em; text-align: center; user-select: none; }
+.vb-code { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; padding-right: 8px; }
+
+/* Zeilen-Farben: entfernt (rot), hinzugefügt (grün), leer (schraffiert) */
+.vb-del { background: rgba(248, 81, 73, 0.15); }
+.vb-del .vb-sign { color: #f85149; }
+.vb-add { background: rgba(63, 185, 80, 0.15); }
+.vb-add .vb-sign { color: #3fb950; }
+.vb-empty { background: var(--background-secondary-alt); opacity: 0.5; }
+.vb-eq .vb-code { color: var(--text-muted); }
+
+/* Änderungsblock mit Seiten-Auswahl */
+.vb-hunk { border: 1px solid var(--background-modifier-border); border-radius: 6px; margin: 8px; overflow: hidden; }
+.vb-hunk-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-family: var(--font-interface);
+  font-size: 0.82em;
+}
+.vb-hunk-label { color: var(--text-muted); margin-right: auto; }
+
+/* gewählte Seite hervorheben, andere dimmen */
+.vb-hunk[data-chosen="local"] .vb-pane-r { opacity: 0.35; }
+.vb-hunk[data-chosen="remote"] .vb-pane-l { opacity: 0.35; }
+.vb-hunk[data-chosen="local"] .vb-btn-local,
+.vb-hunk[data-chosen="remote"] .vb-btn-remote { outline: 2px solid var(--interactive-accent); }
+
+.vb-btn-local { border-left: 3px solid #f85149; }
+.vb-btn-remote { border-left: 3px solid #3fb950; }
+
+/* --- Binärdatei-Auswahl (unverändert) --- */
+.vb-binary { display: flex; gap: 12px; padding: 12px; }
 .vb-card { border: 1px solid var(--background-modifier-border); padding: 12px; cursor: pointer; border-radius: 6px; }
 .vb-card.vb-chosen { outline: 2px solid var(--interactive-accent); }
+
+/* --- Datei-Verlauf (HistoryModal, eigener einfacher Zwei-Spalten-Diff) --- */
 .vb-history-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .vb-history-detail { border-top: 1px solid var(--background-modifier-border); padding-top: 8px; }
+.vb-diff-row { display: flex; gap: 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.vb-diff-row .vb-col { flex: 1; white-space: pre-wrap; padding: 4px; font-family: var(--font-monospace); }
+.vb-change .vb-local { background: rgba(248, 81, 73, 0.15); }
+.vb-change .vb-remote { background: rgba(63, 185, 80, 0.15); }

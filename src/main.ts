@@ -78,20 +78,40 @@ export default class VaultbridgePlugin extends Plugin {
   // gleichzeitige store.rotate()-Aufrufe mit unterschiedlichen Schlüsseln
   // würden den Store beschädigen.
   private rotating = false;
+  // Einmaliger Store→Vault-Nachlauf pro Verbindung: nach dem ersten Settle
+  // (Erst-Pull abgeschlossen, alle Chunks da) alle bereits replizierten Notizen
+  // in den Vault schreiben — sonst blieben auf einem nur lesenden Gerät die
+  // gepullten Dateien unsichtbar, weil der Live-Feed (since:'now') sie nicht
+  // (mehr) abbildet. Wird in connect() zurückgesetzt.
+  private materializedThisConnect = false;
   // Als Feld (statt lokale Closure in connect()), damit restartSync() nach
   // einer Passphrase-Rotation denselben Status-Handler wiederverwenden kann.
   private readonly onSyncStatus = (s: SyncStatus, info?: string): void => {
     this.statusBar.setStatus(s, info);
     if (s === "idle" || s === "paused") {
+      void this.maybeMaterialize();
       void this.refreshConflicts();
       void this.bridge?.reconcileHidden();
       void this.checkAdoption();
     }
   };
 
+  /**
+   * Führt den Store→Vault-Nachlauf genau einmal pro Verbindung aus (nach dem
+   * ersten Settle). Idempotent und modusübergreifend (live wie interval/manuell),
+   * daher über das Flag entkoppelt statt an einen einzelnen Sync-Pfad gebunden.
+   */
+  private async maybeMaterialize(): Promise<void> {
+    if (this.materializedThisConnect) return;
+    this.materializedThisConnect = true;
+    await this.bridge?.reconcileFromStore();
+  }
+
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.statusBar = new StatusBar(this.addStatusBarItem());
+    // Klick auf das Konflikt-Badge öffnet direkt die Konflikt-Ansicht — kein
+    // Umweg über die Befehlspalette nötig.
+    this.statusBar = new StatusBar(this.addStatusBarItem(), () => void this.openConflictView());
     this.addSettingTab(new VaultbridgeSettingsTab(this.app, this));
     this.addCommand({ id: "vaultbridge-connect", name: "Vaultbridge: Verbinden", callback: () => this.connect() });
     this.addCommand({ id: "vaultbridge-disconnect", name: "Vaultbridge: Trennen", callback: () => this.disconnect() });
@@ -153,6 +173,7 @@ export default class VaultbridgePlugin extends Plugin {
 
   async connect(): Promise<void> {
     this.disconnect(); // vorherige Verbindung sauber beenden (re-entrant-sicher)
+    this.materializedThisConnect = false; // Store→Vault-Nachlauf gilt pro Verbindung neu
     try {
       const payload = decodeSetup(this.settings.setupString);
       let passphrase = payload.passphrase ?? "";
@@ -334,6 +355,7 @@ export default class VaultbridgePlugin extends Plugin {
         if (s === "idle" || s === "error") resolve();
       });
     });
+    await this.maybeMaterialize();
     await this.bridge?.reconcileHidden();
     void this.refreshConflicts();
   }
@@ -495,11 +517,11 @@ export default class VaultbridgePlugin extends Plugin {
 
   async openConflictView(): Promise<void> {
     const { workspace } = this.app;
+    // Im Haupt-Editorbereich öffnen (volle Breite) statt im schmalen rechten
+    // Panel — nur so lassen sich beide Versionen nebeneinander vergleichen.
     let leaf = workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)[0] ?? null;
     if (!leaf) {
-      const right = workspace.getRightLeaf(false);
-      if (!right) { new Notice("Vaultbridge: kein Panel verfügbar."); return; }
-      leaf = right;
+      leaf = workspace.getLeaf("tab");
       await leaf.setViewState({ type: VIEW_TYPE_CONFLICTS, active: true });
     }
     workspace.revealLeaf(leaf);
