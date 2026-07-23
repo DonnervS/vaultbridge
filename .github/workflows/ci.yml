@@ -20,6 +20,9 @@ jobs:
       - name: Abhängigkeiten installieren
         run: npm ci
 
+      - name: Lint (Obsidian-Directory-Regeln, nur Errors)
+        run: npx eslint "src/**/*.ts" --max-warnings=-1
+
       - name: Tests
         run: npm test
 

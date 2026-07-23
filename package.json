@@ -8,6 +8,7 @@
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production && node scripts/verify-pouch-bundle.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "lint": "eslint \"src/**/*.ts\"",
     "make-setup": "node scripts/make-setup-string.mjs",
     "verify:bundle": "node scripts/verify-pouch-bundle.mjs"
   },
