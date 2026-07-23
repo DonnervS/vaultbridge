@@ -1,11 +1,22 @@
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import { VaultStore } from "../store/store";
-import { ConflictResolverModal } from "./ConflictResolverModal";
 
 export const VIEW_TYPE_CONFLICTS = "vaultbridge-conflicts";
 
+/**
+ * Konfliktliste in der rechten Seitenleiste (nur die Dateinamen). Ein Klick
+ * öffnet den Vergleich im Haupt-Editorbereich (ConflictDiffView) — die Liste
+ * bleibt dabei stehen und darf sich unabhängig aktualisieren (Sync-Events),
+ * ohne den gerade offenen Diff neu aufzubauen.
+ */
 export class ConflictListView extends ItemView {
-  constructor(leaf: WorkspaceLeaf, private readonly getStore: () => VaultStore | null) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    private readonly getStore: () => VaultStore | null,
+    private readonly onPick: (id: string) => void,
+    private readonly getActiveId: () => string | null,
+    private readonly onResolveIdentical: () => void,
+  ) {
     super(leaf);
   }
 
@@ -18,26 +29,44 @@ export class ConflictListView extends ItemView {
   async render(): Promise<void> {
     const root = this.contentEl;
     root.empty();
-    root.createEl("h3", { text: "Konflikte" });
+    root.addClass("vb-cv-list");
+    root.createEl("div", { cls: "vb-cv-list-head", text: "Konflikte" });
+
     const store = this.getStore();
     if (!store) {
-      root.createEl("p", { text: "Nicht verbunden." });
+      root.createEl("p", { cls: "vb-cv-empty", text: "Nicht verbunden." });
       return;
     }
     const ids = await store.listConflicts();
+    root.querySelector(".vb-cv-list-head")!.setText(`Konflikte (${ids.length})`);
     if (ids.length === 0) {
-      root.createEl("p", { text: "Keine Konflikte 🎉" });
+      root.createEl("p", { cls: "vb-cv-empty", text: "Keine Konflikte 🎉" });
       return;
     }
-    const list = root.createEl("ul");
+
+    // Sammel-Auflösung für die häufigen „unechten“ Konflikte (identischer Inhalt,
+    // nur divergierende Revisionen) — spart das Einzeln-Durchklicken.
+    const resolveBtn = root.createEl("button", { cls: "vb-cv-resolve-all", text: "Identische auflösen" });
+    resolveBtn.onclick = () => this.onResolveIdentical();
+
+    const activeId = this.getActiveId();
     for (const id of ids) {
       const conflict = await store.getConflict(id);
-      if (!conflict) continue;
-      const li = list.createEl("li");
-      const btn = li.createEl("button", { text: conflict.path });
-      btn.onclick = () => {
-        new ConflictResolverModal(this.app, store, id, () => void this.render()).open();
-      };
+      const path = conflict?.path ?? id;
+      const item = root.createDiv({ cls: "vb-cv-item" });
+      item.toggleClass("vb-cv-active", id === activeId);
+      // Pfad in Ordner + Dateiname aufteilen, damit lange Pfade sauber umbrechen
+      // und der Dateiname hervorsticht (statt aus der Box zu laufen).
+      const slash = path.lastIndexOf("/");
+      if (slash >= 0) {
+        item.createDiv({ cls: "vb-cv-item-dir", text: path.slice(0, slash + 1) });
+      }
+      item.createDiv({ cls: "vb-cv-item-name", text: slash >= 0 ? path.slice(slash + 1) : path });
+      item.onclick = () => this.onPick(id);
     }
+  }
+
+  async onClose(): Promise<void> {
+    this.contentEl.empty();
   }
 }

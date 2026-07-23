@@ -21,6 +21,13 @@ export class VaultBridge {
   private incoming: { cancel(): void } | null = null;
   private reconcileRunning = false;
   private pendingHiddenDeletes = new Set<string>();
+  // Bereits erfolgreich in den Vault geschriebene Notiz-IDs. Grundlage dafür,
+  // dass reconcileFromStore bei jedem Settle billig ist (nur neue/verpasste IDs)
+  // und Notizen, deren Chunks beim Pull noch fehlten, in einer späteren Runde
+  // nachgezogen werden. Laufende Updates übernimmt der Live-Feed (subscribe).
+  private materialized = new Set<string>();
+  private reconcileFromStoreRunning = false;
+  private keyMismatchNotified = false;
 
   constructor(
     private readonly app: App,
@@ -95,6 +102,69 @@ export class VaultBridge {
       } catch (e) {
         new Notice(`Vaultbridge: Erst-Abgleich fehlgeschlagen bei ${file.path}: ${String(e)}`);
       }
+    }
+  }
+
+  /**
+   * Materialisiert ALLE Notizen aus dem Store in den Vault. Nötig für (auch nur
+   * zeitweise) lesende Geräte: `store.subscribe` liefert per `since:'now'` nur
+   * Änderungen AB Feed-Start. Bereits replizierte Docs — etwa nach einem
+   * Reconnect oder App-Neustart, oder wenn der Erst-Pull vor dem Feed-Start
+   * abgeschlossen war — erzeugen keinen neuen Change und würden ohne diesen
+   * Nachlauf nie zu Dateien. Idempotent: applyRemote schreibt nur bei
+   * Hash-Unterschied, überspringt bereits identische Dateien.
+   */
+  async reconcileFromStore(): Promise<void> {
+    if (this.reconcileFromStoreRunning) return; // Überlappung bei schnellen Settles vermeiden
+    this.reconcileFromStoreRunning = true;
+    try {
+      let ids: string[];
+      try {
+        ids = await this.store.listNoteIds();
+      } catch (e) {
+        new Notice(`Vaultbridge: Store→Vault-Abgleich fehlgeschlagen: ${String(e)}`);
+        return;
+      }
+      // Nur noch nicht materialisierte IDs betrachten -> nach dem ersten
+      // vollständigen Durchlauf ist der Abgleich billig (nur Set-Differenz).
+      const pending = ids.filter((id) => !this.materialized.has(id));
+      if (pending.length === 0) return;
+
+      let materializedThisRound = 0;
+      for (const id of pending) {
+        // Probe-Entschlüsselung: Ist die Notiz (noch) nicht dekodierbar — etwa
+        // weil ihre Chunks beim laufenden Pull noch nicht angekommen sind (die
+        // Replikation garantiert keine Reihenfolge zwischen n:-Doc und h:-Chunks)
+        // — NICHT als erledigt markieren und in einer späteren Runde (nächster
+        // Settle, dann sind die Chunks da) erneut versuchen. Genau dieser Fall
+        // ließ auf Mobile nur einen Bruchteil der Dateien erscheinen.
+        let decodable = false;
+        try {
+          decodable = (await this.store.readNote(id)) !== null;
+        } catch {
+          decodable = false;
+        }
+        if (!decodable) continue;
+        await this.applyRemote(id);
+        this.materialized.add(id);
+        materializedThisRound++;
+      }
+
+      // Schlüssel-Mismatch: es liegen Notizen an, aber es ließ sich (bislang)
+      // keine einzige entschlüsseln -> Setup-String/Passphrase passt nicht zu
+      // diesen Daten. Der Selbsttest merkt das nicht, weil er nur den LOKALEN
+      // Krypto-Roundtrip prüft. Nur EINMAL melden, nicht bei jedem Settle.
+      if (this.materialized.size === 0 && materializedThisRound === 0 && !this.keyMismatchNotified) {
+        this.keyMismatchNotified = true;
+        new Notice(
+          "Vaultbridge: Es liegen synchronisierte Daten vor, aber keine ließ sich entschlüsseln. " +
+            "Passphrase/Setup-String passt nicht zu diesen Daten — auf allen Geräten muss derselbe " +
+            "Setup-String verwendet werden.",
+          15000,
+        );
+      }
+    } finally {
+      this.reconcileFromStoreRunning = false;
     }
   }
 

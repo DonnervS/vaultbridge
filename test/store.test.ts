@@ -38,6 +38,16 @@ describe("VaultStore", () => {
     expect(await store.getFile("Notiz.md")).toBeNull();
   });
 
+  it("listNoteIds liefert nur Note-IDs (keine Chunks/Marker) — Grundlage des Store→Vault-Nachlaufs", async () => {
+    const store = await makeStore();
+    // chunkSize 4 + Inhalt > 4 Byte erzwingt mehrere Chunk-Docs ("h:") neben der Notiz ("n:").
+    await store.putFile("A.md", utf8.encode("mehr-als-vier-bytes"), meta);
+    await store.putFile("B.md", utf8.encode("zweite-notiz"), meta);
+    const ids = await store.listNoteIds();
+    expect(ids.length).toBe(2);
+    expect(ids.every((id) => id.startsWith("n:"))).toBe(true);
+  });
+
   it("readNote entschlüsselt Pfad + Inhalt anhand der _id", async () => {
     const { deriveKeys } = await import("../src/crypto/crypto");
     const { pathId } = await import("../src/crypto/crypto");

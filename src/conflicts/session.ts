@@ -39,6 +39,59 @@ export class ConflictSession {
     return utf8.encode(mergedText(this.hunks, this.decisions));
   }
 
+  /**
+   * Zeilen der zusammengeführten Endfassung mit Herkunft — Grundlage der
+   * Merge-Vorschau. "context" = unveränderte Zeile (in beiden gleich), "local"/
+   * "remote" = aus einem Änderungsblock übernommene Zeile (je nach aktueller
+   * Entscheidung). Nutzt dieselbe Auswahllogik wie resultBytes()/mergedText().
+   */
+  mergePreview(): Array<{ text: string; origin: "context" | "local" | "remote" }> {
+    const out: Array<{ text: string; origin: "context" | "local" | "remote" }> = [];
+    let changeIdx = 0;
+    for (const h of this.hunks) {
+      if (h.kind === "equal") {
+        for (const line of h.lines) out.push({ text: line, origin: "context" });
+      } else {
+        const choice = this.decisions[changeIdx] ?? "local";
+        for (const line of choice === "local" ? h.local : h.remote) out.push({ text: line, origin: choice });
+        changeIdx++;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Kombiniert BEIDE Versionen (A + B): an jeder Konfliktstelle werden erst die
+   * Zeilen aus „Aktuell", dann die aus „Konflikt" eingefügt; unveränderte Zeilen
+   * einmal. Für die „Beide zusammenführen"-Option — es geht nichts verloren, an
+   * Widerspruchsstellen stehen beide Fassungen untereinander (bei Bedarf danach
+   * von Hand bereinigen). Liefert die Zeilen mit Herkunft für die Vorschau.
+   */
+  combinedPreview(): Array<{ text: string; origin: "context" | "local" | "remote" }> {
+    const out: Array<{ text: string; origin: "context" | "local" | "remote" }> = [];
+    for (const h of this.hunks) {
+      if (h.kind === "equal") {
+        for (const line of h.lines) out.push({ text: line, origin: "context" });
+        continue;
+      }
+      const local = [...h.local];
+      // Vor dem B-Block sicherstellen, dass der A-Block mit Zeilenumbruch endet
+      // (sonst klebt bei einem Konflikt am Dateiende die erste B-Zeile an der
+      // letzten A-Zeile).
+      if (local.length && h.remote.length && !local[local.length - 1].endsWith("\n")) {
+        local[local.length - 1] += "\n";
+      }
+      for (const line of local) out.push({ text: line, origin: "local" });
+      for (const line of h.remote) out.push({ text: line, origin: "remote" });
+    }
+    return out;
+  }
+
+  /** Bytes der A+B-Kombination (siehe combinedPreview). */
+  combinedBytes(): Uint8Array {
+    return utf8.encode(this.combinedPreview().map((l) => l.text).join(""));
+  }
+
   pruneRev(): string {
     return this.input.remote.rev;
   }

@@ -1,13 +1,139 @@
-/* Vaultbridge – Styles folgen in späteren Meilensteinen (Diff-View etc.) */
+/* Vaultbridge – Konflikt-Ansicht (Master-Detail) + GitHub-artiger Diff */
 
-.vb-diff-row { display: flex; gap: 8px; border-bottom: 1px solid var(--background-modifier-border); }
-.vb-col { flex: 1; white-space: pre-wrap; padding: 4px; font-family: var(--font-monospace); }
-.vb-change .vb-local { background: rgba(255,0,0,0.08); }
-.vb-change .vb-remote { background: rgba(0,128,0,0.08); }
-.vb-col.vb-chosen { outline: 2px solid var(--interactive-accent); }
-.vb-conflict-footer { display: flex; gap: 8px; margin-top: 12px; }
-.vb-binary { display: flex; gap: 12px; }
+/* Klickbares Konflikt-Badge in der Statusleiste */
+.vb-status-conflicts { margin-left: 8px; }
+.vb-status-conflicts.vb-clickable { cursor: pointer; text-decoration: underline dotted; }
+.vb-status-conflicts.vb-clickable:hover { color: var(--text-accent); }
+
+/* Konfliktliste (rechte Seitenleiste, eigene ItemView) */
+.vb-cv-list { height: 100%; overflow-y: auto; padding: 8px; }
+.vb-cv-list-head { font-weight: 600; margin-bottom: 8px; padding: 0 2px; }
+.vb-cv-empty, .vb-cv-hint { color: var(--text-muted); padding: 8px; }
+
+.vb-cv-resolve-all {
+  display: block;
+  width: 100%;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+/* Jeder Konflikt eine klar abgegrenzte Box; lange Pfade brechen sauber um */
+.vb-cv-item {
+  display: block;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.vb-cv-item:hover { background: var(--background-modifier-hover); }
+.vb-cv-item.vb-cv-active {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-active-hover);
+}
+.vb-cv-item-dir { color: var(--text-muted); font-size: 0.8em; line-height: 1.3; }
+.vb-cv-item-name { font-weight: 600; line-height: 1.3; }
+
+/* Diff-Bereich (Haupt-Editorbereich, eigene ItemView, volle Breite) */
+.vb-cv-detail { height: 100%; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.vb-cv-detail-head { padding: 10px 14px; border-bottom: 1px solid var(--background-modifier-border); }
+.vb-cv-path { font-weight: 700; font-size: 1.05em; word-break: break-all; }
+.vb-cv-note { color: var(--text-muted); font-size: 0.85em; margin-top: 4px; }
+.vb-cv-body { flex: 1 1 auto; overflow: auto; }
+.vb-cv-identical { padding: 24px; color: var(--text-muted); text-align: center; }
+
+.vb-cv-footer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--background-modifier-border);
+  flex-wrap: wrap;
+}
+
+/* --- GitHub-artiger Side-by-Side-Diff --- */
+.vb-diff { font-family: var(--font-monospace); font-size: 0.82em; }
+
+.vb-diff-head {
+  display: flex;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-family: var(--font-interface);
+  font-size: 0.9em;
+  font-weight: 600;
+}
+.vb-diff-head-cell { flex: 1 1 0; padding: 6px 10px; min-width: 0; }
+.vb-diff-head-cell.vb-side-local { border-right: 1px solid var(--background-modifier-border); }
+
+.vb-drow { display: flex; align-items: stretch; }
+.vb-pane { flex: 1 1 0; display: flex; min-width: 0; }
+.vb-pane-l { border-right: 1px solid var(--background-modifier-border); }
+
+.vb-ln {
+  flex: 0 0 3.2em;
+  text-align: right;
+  padding: 0 6px;
+  color: var(--text-faint);
+  user-select: none;
+  border-right: 1px solid var(--background-modifier-border);
+}
+.vb-code { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; padding-right: 8px; }
+
+.vb-eq .vb-code { color: var(--text-muted); }
+.vb-empty { background: var(--background-secondary-alt); opacity: 0.5; }
+
+/* Unterschiedliche Zeilen NEUTRAL markieren — bewusst kein rot/grün, damit es
+   nicht wie „gelöscht/neu" wirkt. Die Wahl trifft man über A / B / A+B. */
+.vb-chg { background: rgba(210, 160, 30, 0.13); }
+.vb-hunk { border: 1px solid var(--background-modifier-border); border-radius: 6px; margin: 8px; overflow: hidden; }
+
+/* Auflösungs-Buttons: A (Aktuell) blau, B (Konflikt) grün */
+.vb-btn-a { border-left: 3px solid #388bfd; }
+.vb-btn-b { border-left: 3px solid #3fb950; }
+
+/* --- Merge-Vorschau (zusammengeführte Endfassung) --- */
+.vb-merge-note {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.vb-merge { font-family: var(--font-monospace); font-size: 0.82em; }
+.vb-mrow { display: flex; align-items: stretch; border-left: 3px solid transparent; }
+.vb-mrow .vb-ln {
+  flex: 0 0 3.2em;
+  text-align: right;
+  padding: 0 6px;
+  color: var(--text-faint);
+  user-select: none;
+  border-right: 1px solid var(--background-modifier-border);
+}
+.vb-mrow .vb-tag {
+  flex: 0 0 5.5em;
+  padding: 0 6px;
+  font-family: var(--font-interface);
+  font-size: 0.82em;
+  color: var(--text-muted);
+  user-select: none;
+}
+.vb-mrow .vb-code { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; padding-right: 8px; }
+.vb-from-local { background: rgba(56, 139, 253, 0.12); border-left-color: #388bfd; }
+.vb-from-remote { background: rgba(63, 185, 80, 0.12); border-left-color: #3fb950; }
+.vb-from-context .vb-tag { color: var(--text-faint); }
+
+/* --- Binärdatei-Auswahl (unverändert) --- */
+.vb-binary { display: flex; gap: 12px; padding: 12px; }
 .vb-card { border: 1px solid var(--background-modifier-border); padding: 12px; cursor: pointer; border-radius: 6px; }
 .vb-card.vb-chosen { outline: 2px solid var(--interactive-accent); }
+
+/* --- Datei-Verlauf (HistoryModal, eigener einfacher Zwei-Spalten-Diff) --- */
 .vb-history-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .vb-history-detail { border-top: 1px solid var(--background-modifier-border); padding-top: 8px; }
+.vb-diff-row { display: flex; gap: 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.vb-diff-row .vb-col { flex: 1; white-space: pre-wrap; padding: 4px; font-family: var(--font-monospace); }
+.vb-change .vb-local { background: rgba(248, 81, 73, 0.15); }
+.vb-change .vb-remote { background: rgba(63, 185, 80, 0.15); }

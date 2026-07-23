@@ -12,6 +12,8 @@ import { VaultBridge } from "./vault/bridge";
 import { DEFAULT_RULES, SyncRules, migrateRules } from "./vault/rules";
 import { promptPassphrase } from "./ui/PassphrasePromptModal";
 import { ConflictListView, VIEW_TYPE_CONFLICTS } from "./ui/ConflictListView";
+import { ConflictDiffView, VIEW_TYPE_CONFLICT_DIFF } from "./ui/ConflictDiffView";
+import { ConflictSession } from "./conflicts/session";
 import { SyncMode, shouldReplicateNow } from "./store/syncModes";
 import { planPluginReload } from "./plugins/pluginSync";
 import { GeneratorModal } from "./ui/GeneratorModal";
@@ -78,11 +80,19 @@ export default class VaultbridgePlugin extends Plugin {
   // gleichzeitige store.rotate()-Aufrufe mit unterschiedlichen Schlüsseln
   // würden den Store beschädigen.
   private rotating = false;
+  // Aktuell im Diff-Bereich (ConflictDiffView) geöffneter Konflikt. Von der
+  // Liste (rechts) gesetzt, von der Diff-View (Mitte) gelesen.
+  private activeConflictId: string | null = null;
   // Als Feld (statt lokale Closure in connect()), damit restartSync() nach
   // einer Passphrase-Rotation denselben Status-Handler wiederverwenden kann.
   private readonly onSyncStatus = (s: SyncStatus, info?: string): void => {
     this.statusBar.setStatus(s, info);
     if (s === "idle" || s === "paused") {
+      // Bei JEDEM Settle nachziehen (nicht nur einmal): der Pull kommt in Schüben,
+      // und Notizen, deren Chunks in einem früheren Schub noch fehlten, werden erst
+      // in einer späteren Runde dekodierbar. reconcileFromStore ist nach dem ersten
+      // vollständigen Durchlauf billig (nur neue/verpasste IDs).
+      void this.bridge?.reconcileFromStore();
       void this.refreshConflicts();
       void this.bridge?.reconcileHidden();
       void this.checkAdoption();
@@ -91,7 +101,9 @@ export default class VaultbridgePlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.statusBar = new StatusBar(this.addStatusBarItem());
+    // Klick auf das Konflikt-Badge öffnet direkt die Konflikt-Ansicht — kein
+    // Umweg über die Befehlspalette nötig.
+    this.statusBar = new StatusBar(this.addStatusBarItem(), () => void this.openConflictView());
     this.addSettingTab(new VaultbridgeSettingsTab(this.app, this));
     this.addCommand({ id: "vaultbridge-connect", name: "Vaultbridge: Verbinden", callback: () => this.connect() });
     this.addCommand({ id: "vaultbridge-disconnect", name: "Vaultbridge: Trennen", callback: () => this.disconnect() });
@@ -101,12 +113,32 @@ export default class VaultbridgePlugin extends Plugin {
 
     this.registerView(
       VIEW_TYPE_CONFLICTS,
-      (leaf) => new ConflictListView(leaf, () => this.store),
+      (leaf) => new ConflictListView(
+        leaf,
+        () => this.store,
+        (id) => void this.openConflictDiff(id),
+        () => this.activeConflictId,
+        () => void this.resolveIdenticalConflicts(),
+      ),
+    );
+    this.registerView(
+      VIEW_TYPE_CONFLICT_DIFF,
+      (leaf) => new ConflictDiffView(
+        leaf,
+        () => this.store,
+        () => this.activeConflictId,
+        (id) => void this.onConflictResolved(id),
+      ),
     );
     this.addCommand({
       id: "vaultbridge-show-conflicts",
       name: "Vaultbridge: Konflikte anzeigen",
       callback: () => this.openConflictView(),
+    });
+    this.addCommand({
+      id: "vaultbridge-resolve-identical-conflicts",
+      name: "Vaultbridge: Identische Konflikte auflösen",
+      callback: () => void this.resolveIdenticalConflicts(),
     });
     this.addCommand({
       id: "vaultbridge-sync-now",
@@ -334,6 +366,7 @@ export default class VaultbridgePlugin extends Plugin {
         if (s === "idle" || s === "error") resolve();
       });
     });
+    await this.bridge?.reconcileFromStore();
     await this.bridge?.reconcileHidden();
     void this.refreshConflicts();
   }
@@ -484,25 +517,127 @@ export default class VaultbridgePlugin extends Plugin {
     try {
       const ids = await this.store.listConflicts();
       this.statusBar.setConflicts(ids.length);
-      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)) {
-        const view = leaf.view;
-        if (view instanceof ConflictListView) void view.render();
+      // Nur die LISTE (rechts) aktualisieren — der Diff-Bereich (Mitte) bleibt
+      // bewusst stehen, damit ein Sync-Event die gerade offene Auflösung nicht
+      // unter den Fingern zurücksetzt.
+      this.renderConflictList();
+      // Ist der offene Konflikt zwischenzeitlich verschwunden (extern gelöst),
+      // den Diff einmal nachziehen, damit er nicht auf einer toten ID steht.
+      if (this.activeConflictId && !ids.includes(this.activeConflictId)) {
+        this.activeConflictId = ids[0] ?? null;
+        this.renderConflictDiff();
       }
     } catch {
       /* Konfliktprüfung ist best-effort */
     }
   }
 
+  private renderConflictList(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)) {
+      if (leaf.view instanceof ConflictListView) void leaf.view.render();
+    }
+  }
+  private renderConflictDiff(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CONFLICT_DIFF)) {
+      if (leaf.view instanceof ConflictDiffView) void leaf.view.render();
+    }
+  }
+
+  /**
+   * Öffnet die Konfliktliste in der rechten Seitenleiste UND den Diff-Bereich im
+   * Haupt-Editorbereich. Wählt den ersten Konflikt vor, damit sofort etwas zu
+   * sehen ist.
+   */
   async openConflictView(): Promise<void> {
     const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)[0] ?? null;
-    if (!leaf) {
+    // Liste rechts.
+    let listLeaf = workspace.getLeavesOfType(VIEW_TYPE_CONFLICTS)[0] ?? null;
+    if (!listLeaf) {
       const right = workspace.getRightLeaf(false);
-      if (!right) { new Notice("Vaultbridge: kein Panel verfügbar."); return; }
-      leaf = right;
-      await leaf.setViewState({ type: VIEW_TYPE_CONFLICTS, active: true });
+      if (right) { listLeaf = right; await listLeaf.setViewState({ type: VIEW_TYPE_CONFLICTS, active: true }); }
     }
-    workspace.revealLeaf(leaf);
+    // Ersten Konflikt vorwählen, wenn noch keiner offen ist.
+    if (!this.activeConflictId && this.store) {
+      const ids = await this.store.listConflicts();
+      this.activeConflictId = ids[0] ?? null;
+    }
+    // Diff in der Mitte.
+    let diffLeaf = workspace.getLeavesOfType(VIEW_TYPE_CONFLICT_DIFF)[0] ?? null;
+    if (!diffLeaf) {
+      diffLeaf = workspace.getLeaf("tab");
+      await diffLeaf.setViewState({ type: VIEW_TYPE_CONFLICT_DIFF, active: true });
+    }
+    this.renderConflictList();
+    this.renderConflictDiff();
+    if (listLeaf) workspace.revealLeaf(listLeaf);
+    if (diffLeaf) workspace.revealLeaf(diffLeaf);
+  }
+
+  /** Von der Liste (Klick): den gewählten Konflikt im Diff-Bereich öffnen. */
+  async openConflictDiff(id: string): Promise<void> {
+    this.activeConflictId = id;
+    let diffLeaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_CONFLICT_DIFF)[0] ?? null;
+    if (!diffLeaf) {
+      diffLeaf = this.app.workspace.getLeaf("tab");
+      await diffLeaf.setViewState({ type: VIEW_TYPE_CONFLICT_DIFF, active: true });
+    }
+    this.renderConflictDiff();
+    this.renderConflictList(); // Markierung des aktiven Eintrags
+    this.app.workspace.revealLeaf(diffLeaf);
+  }
+
+  /**
+   * Löst alle Konflikte auf, deren Versionen inhaltlich identisch sind (nur
+   * divergierende CouchDB-Revisionen, kein echter Unterschied) — bei diesen geht
+   * durch das Auflösen nichts verloren. Echte Konflikte (mit Unterschieden oder
+   * mehreren Konfliktzweigen) bleiben unangetastet und müssen einzeln bearbeitet
+   * werden.
+   */
+  async resolveIdenticalConflicts(): Promise<void> {
+    if (!this.store) { new Notice("Vaultbridge: nicht verbunden."); return; }
+    let resolved = 0;
+    let remaining = 0;
+    try {
+      const ids = await this.store.listConflicts();
+      for (const id of ids) {
+        const c = await this.store.getConflict(id);
+        if (!c) continue;
+        const identical =
+          !c.isBinary &&
+          c.remotes.length === 1 &&
+          new ConflictSession({
+            id: c.id, path: c.path, isBinary: c.isBinary,
+            local: { rev: c.local.rev, bytes: c.local.bytes },
+            remote: { rev: c.remotes[0].rev, bytes: c.remotes[0].bytes },
+          }).hunks.every((h) => h.kind === "equal");
+        if (!identical) { remaining++; continue; }
+        await this.store.resolveConflict(
+          c.id, c.path, c.local.bytes, c.local.meta, c.remotes.map((r) => r.rev),
+        );
+        resolved++;
+      }
+      new Notice(
+        `Vaultbridge: ${resolved} identische Konflikte gelöst` +
+          (remaining > 0 ? `, ${remaining} echte verbleiben.` : "."),
+        8000,
+      );
+    } catch (e) {
+      new Notice(`Vaultbridge: Auflösen fehlgeschlagen: ${String(e)}`);
+    }
+    this.activeConflictId = null;
+    await this.refreshConflicts();
+    this.renderConflictDiff();
+  }
+
+  /** Von der Diff-View nach erfolgreicher Auflösung: nächsten Konflikt zeigen. */
+  private async onConflictResolved(resolvedId: string): Promise<void> {
+    if (this.activeConflictId === resolvedId) this.activeConflictId = null;
+    if (this.store) {
+      const ids = await this.store.listConflicts();
+      this.activeConflictId = ids.find((i) => i !== resolvedId) ?? null;
+    }
+    await this.refreshConflicts();
+    this.renderConflictDiff();
   }
 
   private async openHistory(path: string): Promise<void> {

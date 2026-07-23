@@ -225,6 +225,18 @@ export class VaultStore {
     return map;
   }
 
+  /**
+   * IDs aller Note-Docs (nur "n:", ohne Chunks/Marker). Grundlage für den
+   * Store→Vault-Nachlauf (VaultBridge.reconcileFromStore): der Live-Feed
+   * (subscribe, since:'now') materialisiert nur Änderungen AB Feed-Start —
+   * bereits replizierte Docs (Reconnect/App-Neustart auf einem nur lesenden
+   * Gerät) würden sonst nie in Dateien geschrieben.
+   */
+  async listNoteIds(): Promise<string[]> {
+    const res = await this.db.allDocs({ startkey: "n:", endkey: "n:￰" });
+    return res.rows.map((r) => r.id);
+  }
+
   subscribe(onNoteChange: (id: string) => void): { cancel(): void } {
     const feed = this.db.changes({ live: true, since: "now", include_docs: false });
     feed.on("change", (change) => {
