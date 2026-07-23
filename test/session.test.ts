@@ -51,6 +51,15 @@ describe("ConflictSession", () => {
     expect(s.mergePreview().map((l) => l.text).join("")).toBe(utf8.decode(s.resultBytes()));
   });
 
+  it("combinedBytes fügt A + B zusammen (beide Fassungen)", () => {
+    const s = new ConflictSession(input());
+    // a (Kontext) + b (aus A) + B2 (aus B) + c (Kontext)
+    expect(utf8.decode(s.combinedBytes())).toBe("a\nb\nB2\nc");
+    // combinedPreview kennzeichnet die Herkunft und stimmt mit den Bytes überein.
+    expect(s.combinedPreview().map((l) => l.origin)).toEqual(["context", "local", "remote", "context"]);
+    expect(s.combinedPreview().map((l) => l.text).join("")).toBe(utf8.decode(s.combinedBytes()));
+  });
+
   it("Binär: keine Hunks, Ergebnis = gewählte Seite", () => {
     const s = new ConflictSession(
       input({ isBinary: true, local: { rev: "2-a", bytes: new Uint8Array([1, 2]) }, remote: { rev: "2-b", bytes: new Uint8Array([9]) } }),

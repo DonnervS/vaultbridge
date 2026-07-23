@@ -70,12 +70,12 @@ export class ConflictDiffView extends ItemView {
     const body = root.createDiv({ cls: "vb-cv-body" });
     const footer = root.createDiv({ cls: "vb-cv-footer" });
 
-    // Binärdatei: nur ganze Seite übernehmen (kein Textmerge).
+    // Binärdatei: nur ganze Seite übernehmen (kein Textmerge, kein A+B).
     if (conflict.isBinary) {
       this.renderBinary(body, conflict);
-      footer.createEl("button", { cls: "vb-btn-local", text: "⬅ Ganz „Aktuell“ behalten" })
+      footer.createEl("button", { cls: "vb-btn-a", text: "Nur „Aktuell“ (A)" })
         .onclick = () => void this.saveWhole(store, conflict, session, "local");
-      footer.createEl("button", { cls: "vb-btn-remote", text: "Ganz „Konflikt“ übernehmen ➡" })
+      footer.createEl("button", { cls: "vb-btn-b", text: "Nur „Konflikt“ (B)" })
         .onclick = () => void this.saveWhole(store, conflict, session, "remote");
       return;
     }
@@ -89,76 +89,60 @@ export class ConflictDiffView extends ItemView {
     }
 
     const noteEl = header.querySelector(".vb-cv-note") as HTMLElement | null;
-    // Textkonflikt mit Unterschieden. Drei Schritte, umschaltbar ohne die
-    // getroffene Auswahl (session.decisions) zu verlieren (nur body+footer neu
-    // befüllen, die View/session bleiben):
-    //  1. Vergleich: Side-by-Side nur zum Ansehen; unterschiedliche Abschnitte
-    //     neutral markiert. Ganz Aktuell/Ganz Konflikt lösen sofort.
-    //  2. Zusammenführen: pro Abschnitt eine Seite wählen. Farbe zeigt die
-    //     KONSEQUENZ (grün = wird behalten, rot durchgestrichen = wird verworfen).
-    //  3. Vorschau: die resultierende Endfassung ansehen und übernehmen.
     const setNote = (t: string): void => { if (noteEl) noteEl.setText(t); };
 
+    // Drei klare Optionen: nur A, nur B, oder A+B (beide kombiniert). „A + B“
+    // öffnet zuvor eine Vorschau der zusammengeführten Datei zum Übernehmen.
     const showCompare = (): void => {
       body.empty(); footer.empty();
-      setNote("„Aktuell“ ist die derzeit gültige Version, „Konflikt“ die abweichende. Farbig = Abschnitte, die sich unterscheiden.");
-      this.renderDiff(body, session, false);
-      footer.createEl("button", { cls: "vb-btn-local", text: "⬅ Ganz „Aktuell“ behalten" })
+      setNote("„Aktuell“ (A) ist die derzeit gültige Version, „Konflikt“ (B) die abweichende. Farbig markiert sind die Abschnitte, die sich unterscheiden.");
+      this.renderDiff(body, session);
+      footer.createEl("button", { cls: "vb-btn-a", text: "Nur „Aktuell“ (A)" })
         .onclick = () => void this.saveWhole(store, conflict, session, "local");
-      footer.createEl("button", { cls: "vb-btn-remote", text: "Ganz „Konflikt“ übernehmen ➡" })
+      footer.createEl("button", { cls: "vb-btn-b", text: "Nur „Konflikt“ (B)" })
         .onclick = () => void this.saveWhole(store, conflict, session, "remote");
-      const merge = footer.createEl("button", { text: "Abschnittsweise zusammenführen →" });
-      merge.addClass("mod-cta");
-      merge.onclick = () => showMerge();
+      const combine = footer.createEl("button", { text: "Beide zusammenführen (A + B) →" });
+      combine.addClass("mod-cta");
+      combine.onclick = () => showCombined();
     };
-    const showMerge = (): void => {
+    const showCombined = (): void => {
       body.empty(); footer.empty();
-      setNote("Wähle je Abschnitt die Seite, die du behalten willst. Grün = wird behalten, rot durchgestrichen = wird verworfen.");
-      this.renderDiff(body, session, true);
+      setNote("Beide Versionen zusammengeführt: an Konfliktstellen steht erst A, dann B untereinander. Es geht nichts verloren — bei Bedarf danach von Hand bereinigen.");
+      this.renderCombinedPreview(body, session);
       footer.createEl("button", { text: "← Zurück" }).onclick = () => showCompare();
-      const preview = footer.createEl("button", { text: "Vorschau der Fassung →" });
-      preview.addClass("mod-cta");
-      preview.onclick = () => showPreview();
-    };
-    const showPreview = (): void => {
-      body.empty(); footer.empty();
-      setNote("So sieht die zusammengeführte Datei aus. Passt es, übernehmen — sonst zurück zur Auswahl.");
-      this.renderMergePreview(body, session);
-      footer.createEl("button", { text: "← Zurück zur Auswahl" }).onclick = () => showMerge();
-      const apply = footer.createEl("button", { text: "✓ Diese Fassung übernehmen & speichern" });
+      const apply = footer.createEl("button", { text: "✓ Zusammengeführt übernehmen & speichern" });
       apply.addClass("mod-cta");
-      apply.onclick = () => void this.save(store, conflict, session);
+      apply.onclick = () => void this.saveBytes(store, conflict, session, session.combinedBytes());
     };
     showCompare();
   }
 
   /**
-   * Vorschau der zusammengeführten Endfassung: die tatsächlich resultierende
-   * Datei Zeile für Zeile, wobei aus einem Konfliktabschnitt übernommene Zeilen
-   * farblich markiert sind (Aktuell/Konflikt). So sieht man vor dem Speichern,
-   * was herauskommt.
+   * Vorschau der A+B-Kombination: die resultierende Datei Zeile für Zeile, wobei
+   * Zeilen aus einem Konfliktabschnitt nach Herkunft markiert sind (blau = aus
+   * Aktuell, grün = aus Konflikt). So sieht man vor dem Speichern, was herauskommt.
    */
-  private renderMergePreview(root: HTMLElement, session: ConflictSession): void {
+  private renderCombinedPreview(root: HTMLElement, session: ConflictSession): void {
     root.createDiv({
       cls: "vb-merge-note",
-      text: "Vorschau der zusammengeführten Datei. Markierte Zeilen stammen aus einem Konfliktabschnitt (blau = Aktuell, grün = Konflikt).",
+      text: "Vorschau der zusammengeführten Datei. Markierte Zeilen stammen aus einem Konfliktabschnitt (blau = aus Aktuell, grün = aus Konflikt).",
     });
     const table = root.createDiv({ cls: "vb-merge" });
     const strip = (s: string): string => s.replace(/\n$/, "");
     let n = 0;
-    for (const line of session.mergePreview()) {
+    for (const line of session.combinedPreview()) {
       n++;
       const row = table.createDiv({ cls: `vb-mrow vb-from-${line.origin}` });
       row.createSpan({ cls: "vb-ln", text: String(n) });
       row.createSpan({
         cls: "vb-tag",
-        text: line.origin === "local" ? "Aktuell" : line.origin === "remote" ? "Konflikt" : "",
+        text: line.origin === "local" ? "A" : line.origin === "remote" ? "B" : "",
       });
       row.createSpan({ cls: "vb-code", text: strip(line.text) });
     }
   }
 
-  /** Komplett eine Seite übernehmen und sofort speichern. */
+  /** Komplett eine Seite (A oder B) übernehmen und sofort speichern. */
   private async saveWhole(
     store: VaultStore,
     conflict: { id: string; path: string; local: { meta: import("../store/model").FileMeta } },
@@ -166,19 +150,20 @@ export class ConflictDiffView extends ItemView {
     side: "local" | "remote",
   ): Promise<void> {
     session.takeWhole(side);
-    await this.save(store, conflict, session);
+    await this.saveBytes(store, conflict, session, session.resultBytes());
   }
 
-  private async save(
+  private async saveBytes(
     store: VaultStore,
     conflict: { id: string; path: string; local: { meta: import("../store/model").FileMeta } },
     session: ConflictSession,
+    bytes: Uint8Array,
   ): Promise<void> {
     try {
       await store.resolveConflict(
         conflict.id,
         conflict.path,
-        session.resultBytes(),
+        bytes,
         conflict.local.meta,
         [session.pruneRev()],
       );
@@ -190,23 +175,19 @@ export class ConflictDiffView extends ItemView {
   }
 
   /**
-   * Side-by-Side-Diff.
-   *  interactive=false (Vergleich): nur ansehen, unterschiedliche Abschnitte
-   *    neutral markiert, keine Buttons.
-   *  interactive=true (Zusammenführen): pro Abschnitt eine Seite wählen; die
-   *    Farbe zeigt die Konsequenz (grün = behalten, rot durchgestrichen =
-   *    verworfen), gesteuert über data-chosen am Abschnitt.
+   * Side-by-Side-Diff zum Ansehen: „Aktuell" (A) links, „Konflikt" (B) rechts;
+   * unterschiedliche Abschnitte neutral markiert (bewusst kein rot/grün — die
+   * Wahl trifft man über die Buttons A / B / A+B, nicht hier).
    */
-  private renderDiff(root: HTMLElement, session: ConflictSession, interactive: boolean): void {
-    const table = root.createDiv({ cls: "vb-diff" + (interactive ? " vb-interactive" : "") });
+  private renderDiff(root: HTMLElement, session: ConflictSession): void {
+    const table = root.createDiv({ cls: "vb-diff" });
 
     const colHead = table.createDiv({ cls: "vb-diff-head" });
-    colHead.createDiv({ cls: "vb-diff-head-cell vb-side-local", text: "Aktuell (gültig)" });
-    colHead.createDiv({ cls: "vb-diff-head-cell vb-side-remote", text: "Konflikt (abweichend)" });
+    colHead.createDiv({ cls: "vb-diff-head-cell vb-side-local", text: "Aktuell (A)" });
+    colHead.createDiv({ cls: "vb-diff-head-cell vb-side-remote", text: "Konflikt (B)" });
 
     let lnLocal = 0;
     let lnRemote = 0;
-    let changeIdx = 0;
     const strip = (s: string): string => s.replace(/\n$/, "");
 
     const addRow = (
@@ -231,19 +212,7 @@ export class ConflictDiffView extends ItemView {
         }
         continue;
       }
-      const idx = changeIdx++;
-      const block = table.createDiv({ cls: "vb-hunk" });
-      block.dataset.chosen = "local";
-
-      if (interactive) {
-        const bar = block.createDiv({ cls: "vb-hunk-bar" });
-        bar.createSpan({ cls: "vb-hunk-label", text: "Diesen Abschnitt behalten:" });
-        const pick = (chosen: "local" | "remote") => { block.dataset.chosen = chosen; };
-        bar.createEl("button", { cls: "vb-btn-local", text: "⬅ Aktuell" }).onclick = () => { session.setDecision(idx, "local"); pick("local"); };
-        bar.createEl("button", { cls: "vb-btn-remote", text: "Konflikt ➡" }).onclick = () => { session.setDecision(idx, "remote"); pick("remote"); };
-      }
-
-      const rows = block.createDiv({ cls: "vb-hunk-rows" });
+      const rows = table.createDiv({ cls: "vb-hunk" });
       const max = Math.max(hunk.local.length, hunk.remote.length);
       for (let i = 0; i < max; i++) {
         const l = i < hunk.local.length ? hunk.local[i] : null;

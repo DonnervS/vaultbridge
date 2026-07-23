@@ -86,40 +86,14 @@
 .vb-eq .vb-code { color: var(--text-muted); }
 .vb-empty { background: var(--background-secondary-alt); opacity: 0.5; }
 
-/* Vergleich (nur ansehen): unterschiedliche Zeilen NEUTRAL markieren — bewusst
-   kein rot/grün, damit es nicht wie „gelöscht/neu" wirkt (es ist eine Wahl). */
-.vb-diff:not(.vb-interactive) .vb-chg { background: rgba(210, 160, 30, 0.13); }
-
-/* Zusammenführen: die Farbe zeigt die KONSEQUENZ der Wahl —
-   gewählte Seite grün (wird behalten), andere Seite rot + durchgestrichen
-   (wird verworfen). */
-.vb-interactive .vb-hunk[data-chosen="local"] .vb-pane-l.vb-chg,
-.vb-interactive .vb-hunk[data-chosen="remote"] .vb-pane-r.vb-chg { background: rgba(63, 185, 80, 0.20); }
-.vb-interactive .vb-hunk[data-chosen="local"] .vb-pane-r.vb-chg,
-.vb-interactive .vb-hunk[data-chosen="remote"] .vb-pane-l.vb-chg { background: rgba(248, 81, 73, 0.13); }
-.vb-interactive .vb-hunk[data-chosen="local"] .vb-pane-r.vb-chg .vb-code,
-.vb-interactive .vb-hunk[data-chosen="remote"] .vb-pane-l.vb-chg .vb-code { text-decoration: line-through; opacity: 0.65; }
-
-/* Änderungsblock mit Seiten-Auswahl */
+/* Unterschiedliche Zeilen NEUTRAL markieren — bewusst kein rot/grün, damit es
+   nicht wie „gelöscht/neu" wirkt. Die Wahl trifft man über A / B / A+B. */
+.vb-chg { background: rgba(210, 160, 30, 0.13); }
 .vb-hunk { border: 1px solid var(--background-modifier-border); border-radius: 6px; margin: 8px; overflow: hidden; }
-.vb-hunk-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  background: var(--background-secondary);
-  border-bottom: 1px solid var(--background-modifier-border);
-  font-family: var(--font-interface);
-  font-size: 0.82em;
-}
-.vb-hunk-label { color: var(--text-muted); margin-right: auto; }
 
-/* aktive Wahl am Umschalt-Button hervorheben */
-.vb-hunk[data-chosen="local"] .vb-btn-local,
-.vb-hunk[data-chosen="remote"] .vb-btn-remote { outline: 2px solid var(--interactive-accent); }
-
-.vb-btn-local { border-left: 3px solid #3fb950; }
-.vb-btn-remote { border-left: 3px solid #3fb950; }
+/* Auflösungs-Buttons: A (Aktuell) blau, B (Konflikt) grün */
+.vb-btn-a { border-left: 3px solid #388bfd; }
+.vb-btn-b { border-left: 3px solid #3fb950; }
 
 /* --- Merge-Vorschau (zusammengeführte Endfassung) --- */
 .vb-merge-note {
