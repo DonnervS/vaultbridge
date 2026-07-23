@@ -23,6 +23,6 @@ export async function chunkId(vaultSalt: Uint8Array, chunk: Uint8Array): Promise
   const buf = new Uint8Array(chunk.length + vaultSalt.length);
   buf.set(chunk, 0);
   buf.set(vaultSalt, chunk.length);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", buf as Uint8Array<ArrayBuffer>));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", buf));
   return "h:" + bytesToHex(digest);
 }

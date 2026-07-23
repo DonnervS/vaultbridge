@@ -1,5 +1,10 @@
 /* Vaultbridge – Konflikt-Ansicht (Master-Detail) + GitHub-artiger Diff */
 
+/* Hilfsklassen: ersetzen frühere inline-styles (Obsidian-Review: no-static-styles-assignment) */
+.vaultbridge-full-width { width: 100%; }
+.vaultbridge-bold { font-weight: bold; }
+.vaultbridge-qr { display: block; width: 256px; max-width: 100%; }
+
 /* Klickbares Konflikt-Badge in der Statusleiste */
 .vb-status-conflicts { margin-left: 8px; }
 .vb-status-conflicts.vb-clickable { cursor: pointer; text-decoration: underline dotted; }

@@ -197,14 +197,14 @@ export class VaultBridge {
             // in eine Sidecar-Datei sichern, damit sie nicht verloren geht; danach
             // gewinnt die Remote-Version (konsistent über alle Geräte).
             try {
-              await adapter.writeBinary(`${note.path}.vaultbridge-konflikt`, current.slice().buffer as ArrayBuffer);
+              await adapter.writeBinary(`${note.path}.vaultbridge-konflikt`, current.slice().buffer);
               new Notice(`Vaultbridge: konkurrierende Änderung an ${note.path}. Deine lokale Version wurde als ${note.path}.vaultbridge-konflikt gesichert.`);
             } catch { /* Sidecar ist best-effort */ }
           }
         }
         this.guard.markApplied(note.path, targetHash);
         await this.ensureParentAdapter(note.path);
-        await adapter.writeBinary(note.path, note.bytes.slice().buffer as ArrayBuffer);
+        await adapter.writeBinary(note.path, note.bytes.slice().buffer);
         this.updateKnown(note.path, targetHash);
         this.onApplied?.(note.path);
         return;
@@ -218,7 +218,9 @@ export class VaultBridge {
       );
       if (action === "delete" && existing instanceof TFile) {
         this.guard.markApplied(note.path, DELETE_SENTINEL);
-        await vault.delete(existing);
+        // trashFile statt vault.delete: respektiert die Löschpräferenz des Nutzers
+        // (System-/.trash-Ordner) und ist damit wiederherstellbar.
+        await this.app.fileManager.trashFile(existing);
         return;
       }
       if (action !== "write") return;
@@ -226,7 +228,7 @@ export class VaultBridge {
       const targetHash = await contentHash(note.bytes);
       // Obsidians modify/createBinary erwarten ArrayBuffer; slice() liefert eine
       // exakte, offset-freie Kopie -> sicher als ArrayBuffer.
-      const ab = note.bytes.slice().buffer as ArrayBuffer;
+      const ab = note.bytes.slice().buffer;
       if (existing instanceof TFile) {
         const current = new Uint8Array(await vault.readBinary(existing));
         if ((await contentHash(current)) === targetHash) return; // schon in sync (auch lokaler Ursprung)
@@ -324,7 +326,7 @@ export class VaultBridge {
             // lokal UND remote seit letztem Sync geändert -> lokale Version sichern,
             // Upload überspringen (applyRemote hat/übernimmt die Remote-Version).
             try {
-              await adapter.writeBinary(`${path}.vaultbridge-konflikt`, bytes.slice().buffer as ArrayBuffer);
+              await adapter.writeBinary(`${path}.vaultbridge-konflikt`, bytes.slice().buffer);
               new Notice(`Vaultbridge: konkurrierende Änderung an ${path}. Lokale Version gesichert.`);
             } catch { /* best-effort */ }
             continue;

@@ -105,8 +105,8 @@ export default class VaultbridgePlugin extends Plugin {
     // Umweg über die Befehlspalette nötig.
     this.statusBar = new StatusBar(this.addStatusBarItem(), () => void this.openConflictView());
     this.addSettingTab(new VaultbridgeSettingsTab(this.app, this));
-    this.addCommand({ id: "vaultbridge-connect", name: "Vaultbridge: Verbinden", callback: () => this.connect() });
-    this.addCommand({ id: "vaultbridge-disconnect", name: "Vaultbridge: Trennen", callback: () => this.disconnect() });
+    this.addCommand({ id: "connect", name: "Verbinden", callback: () => void this.connect() });
+    this.addCommand({ id: "disconnect", name: "Trennen", callback: () => this.disconnect() });
     // Autostart (settings.autostart) verbindet am Ende von onload() via
     // onLayoutReady automatisch. Der manuelle Befehl "Vaultbridge: Verbinden"
     // bleibt für den Fall, dass Autostart aus ist oder man neu verbinden will.
@@ -131,23 +131,23 @@ export default class VaultbridgePlugin extends Plugin {
       ),
     );
     this.addCommand({
-      id: "vaultbridge-show-conflicts",
-      name: "Vaultbridge: Konflikte anzeigen",
-      callback: () => this.openConflictView(),
+      id: "show-conflicts",
+      name: "Konflikte anzeigen",
+      callback: () => void this.openConflictView(),
     });
     this.addCommand({
-      id: "vaultbridge-resolve-identical-conflicts",
-      name: "Vaultbridge: Identische Konflikte auflösen",
+      id: "resolve-identical-conflicts",
+      name: "Identische Konflikte auflösen",
       callback: () => void this.resolveIdenticalConflicts(),
     });
     this.addCommand({
-      id: "vaultbridge-sync-now",
-      name: "Vaultbridge: Jetzt synchronisieren",
+      id: "sync-now",
+      name: "Jetzt synchronisieren",
       callback: () => void this.syncOnce(),
     });
     this.addCommand({
-      id: "vaultbridge-generate-setup",
-      name: "Vaultbridge: Setup-String erzeugen",
+      id: "generate-setup",
+      name: "Setup-String erzeugen",
       callback: () =>
         new GeneratorModal(this.app, async (setupString) => {
           this.settings.setupString = setupString;
@@ -155,8 +155,8 @@ export default class VaultbridgePlugin extends Plugin {
         }).open(),
     });
     this.addCommand({
-      id: "vaultbridge-file-history",
-      name: "Vaultbridge: Datei-Verlauf anzeigen",
+      id: "file-history",
+      name: "Datei-Verlauf anzeigen",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
         if (!file || !this.store) return false;
@@ -179,7 +179,7 @@ export default class VaultbridgePlugin extends Plugin {
     });
   }
 
-  async onunload(): Promise<void> {
+  onunload(): void {
     this.disconnect();
   }
 
@@ -333,22 +333,14 @@ export default class VaultbridgePlugin extends Plugin {
     this.pluginChanges.clear();
     this.pluginReloadTimer = null;
     if (ids.length === 0) return;
-    const notice = new Notice(`Vaultbridge: Plugins aktualisiert (${ids.join(", ")}). Zum Neuladen hier klicken.`, 0);
-    notice.noticeEl.style.cursor = "pointer";
-    notice.noticeEl.addEventListener("click", async () => {
-      notice.hide();
-      for (const id of ids) {
-        try {
-          // @ts-ignore - app.plugins ist intern, aber stabil genug für diesen Zweck
-          await this.app.plugins.disablePlugin(id);
-          // @ts-ignore
-          await this.app.plugins.enablePlugin(id);
-        } catch (e) {
-          new Notice(`Vaultbridge: Neu laden von ${id} fehlgeschlagen: ${String(e)}`);
-        }
-      }
-      new Notice("Plugins neu geladen.");
-    });
+    // Rein informativ: Vaultbridge lädt keine Plugins mehr programmatisch neu
+    // (kein disablePlugin/enablePlugin). Der Nutzer entscheidet selbst, wann er
+    // neu lädt.
+    new Notice(
+      `Vaultbridge: Plugins aktualisiert (${ids.join(", ")}). ` +
+        "Zum Übernehmen Obsidian neu laden oder die betroffenen Plugins aus- und wieder einschalten.",
+      0,
+    );
   }
 
   private isOnWifi(): boolean {
@@ -451,7 +443,7 @@ export default class VaultbridgePlugin extends Plugin {
         // keysForHistory noch auf dem alten Schlüssel stehen: spätere
         // Änderungen würden unter einem Schlüssel verschlüsselt, den kein
         // Peer kennt (stiller Ein-Weg-Sync-Stillstand).
-        this.store!.setKeys(oldKeys, newKeys);
+        this.store.setKeys(oldKeys, newKeys);
         // In-memory Config im selben Zug zurückdrehen wie den Store-Schlüssel
         // — siehe Kommentar bei der Sicherung oben.
         this.keysForHistory = prevKeysForHistory;
@@ -569,8 +561,8 @@ export default class VaultbridgePlugin extends Plugin {
     }
     this.renderConflictList();
     this.renderConflictDiff();
-    if (listLeaf) workspace.revealLeaf(listLeaf);
-    if (diffLeaf) workspace.revealLeaf(diffLeaf);
+    if (listLeaf) void workspace.revealLeaf(listLeaf);
+    if (diffLeaf) void workspace.revealLeaf(diffLeaf);
   }
 
   /** Von der Liste (Klick): den gewählten Konflikt im Diff-Bereich öffnen. */
@@ -583,7 +575,7 @@ export default class VaultbridgePlugin extends Plugin {
     }
     this.renderConflictDiff();
     this.renderConflictList(); // Markierung des aktiven Eintrags
-    this.app.workspace.revealLeaf(diffLeaf);
+    void this.app.workspace.revealLeaf(diffLeaf);
   }
 
   /**
@@ -649,7 +641,8 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = (await this.loadData()) as Partial<VaultbridgeSettings> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data ?? {});
     // Regeln auf das aktuelle Schema migrieren (v1-Allowlist -> v2 "alles syncen").
     this.settings.rules = migrateRules(this.settings.rules);
   }

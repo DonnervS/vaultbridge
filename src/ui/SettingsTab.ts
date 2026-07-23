@@ -28,7 +28,9 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Vaultbridge" });
+    // Kein eigener "Vaultbridge"-Überschriftenblock: Obsidian zeigt den
+    // Plugin-Namen bereits als Titel des Einstellungs-Tabs (Review-Regel
+    // no-problematic-settings-headings).
 
     // Defensive: Altdaten aus einer Version vor den Regeln könnten `rules`
     // fehlen lassen, obwohl loadSettings() das eigentlich absichert.
@@ -47,7 +49,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
         ta.inputEl.rows = 4;
-        ta.inputEl.style.width = "100%";
+        ta.inputEl.addClass("vaultbridge-full-width");
       });
 
     new Setting(containerEl)
@@ -91,7 +93,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
         }),
       );
 
-    containerEl.createEl("h3", { text: "Dateisteuerung" });
+    new Setting(containerEl).setName("Dateisteuerung").setHeading();
 
     containerEl.createEl("p", {
       text:
@@ -128,7 +130,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
         ta.inputEl.rows = 6;
-        ta.inputEl.style.width = "100%";
+        ta.inputEl.addClass("vaultbridge-full-width");
       });
 
     new Setting(containerEl)
@@ -146,7 +148,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
         ta.inputEl.rows = 3;
-        ta.inputEl.style.width = "100%";
+        ta.inputEl.addClass("vaultbridge-full-width");
       });
 
     new Setting(containerEl)
@@ -185,7 +187,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl("h3", { text: "Synchronisierung" });
+    new Setting(containerEl).setName("Synchronisierung").setHeading();
 
     new Setting(containerEl)
       .setName("Automatisch verbinden")

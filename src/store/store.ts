@@ -4,6 +4,13 @@ import { NoteDoc, ChunkDoc, FileMeta } from "./model";
 import { contentHash } from "../vault/applyChange";
 import { MARKER_ID, EpochMarker } from "../crypto/rotation";
 
+// Wandelt einen unbekannten Fehlerwert in ein Error-Objekt. Der unknown-Parameter
+// verhindert, dass ein Truthy-Check den Wert auf {} verengt (Default-toString ->
+// no-base-to-string); Originalfehler bleibt erhalten, falls bereits ein Error.
+function toError(e: unknown): Error {
+  return e instanceof Error ? e : new Error(String(e));
+}
+
 export interface ConflictVersion {
   rev: string;
   bytes: Uint8Array;
@@ -209,7 +216,7 @@ export class VaultStore {
         pruneError = pruneError ?? e;
       }
     }
-    if (pruneError) throw pruneError;
+    if (pruneError) throw toError(pruneError);
   }
 
   async pathHashes(): Promise<Map<string, string>> {
@@ -239,7 +246,7 @@ export class VaultStore {
 
   subscribe(onNoteChange: (id: string) => void): { cancel(): void } {
     const feed = this.db.changes({ live: true, since: "now", include_docs: false });
-    feed.on("change", (change) => {
+    void feed.on("change", (change) => {
       if (change.id.startsWith("n:")) onNoteChange(change.id);
     });
     return { cancel: () => feed.cancel() };
@@ -273,7 +280,7 @@ export class VaultStore {
 
   private async getRaw<T>(id: string): Promise<(T & { _rev: string }) | null> {
     try {
-      return (await this.db.get<T>(id)) as T & { _rev: string };
+      return await this.db.get<T>(id);
     } catch {
       return null;
     }

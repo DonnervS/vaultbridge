@@ -47,7 +47,7 @@ export class ConflictDiffView extends ItemView {
     }
 
     const header = root.createDiv({ cls: "vb-cv-detail-head" });
-    header.createEl("div", { cls: "vb-cv-path", text: conflict.path });
+    header.createDiv({ cls: "vb-cv-path", text: conflict.path });
 
     const session = new ConflictSession({
       id: conflict.id,
@@ -58,7 +58,7 @@ export class ConflictDiffView extends ItemView {
     });
 
     const identical = !conflict.isBinary && session.hunks.every((h) => h.kind === "equal");
-    header.createEl("div", {
+    header.createDiv({
       cls: "vb-cv-note",
       text: identical
         ? "Beide Versionen sind inhaltlich identisch — „Konflikt auflösen“ genügt (es geht nichts verloren)."
@@ -88,7 +88,7 @@ export class ConflictDiffView extends ItemView {
       return;
     }
 
-    const noteEl = header.querySelector(".vb-cv-note") as HTMLElement | null;
+    const noteEl = header.querySelector(".vb-cv-note");
     const setNote = (t: string): void => { if (noteEl) noteEl.setText(t); };
 
     // Drei klare Optionen: nur A, nur B, oder A+B (beide kombiniert). „A + B“
@@ -235,10 +235,10 @@ export class ConflictDiffView extends ItemView {
     const cards = root.createDiv({ cls: "vb-binary" });
     const local = cards.createDiv({ cls: "vb-card" });
     local.createEl("b", { text: "Aktuell (gültig)" });
-    local.createEl("div", { text: `${conflict.local.bytes.length} Bytes` });
+    local.createDiv({ text: `${conflict.local.bytes.length} Bytes` });
     const remote = cards.createDiv({ cls: "vb-card" });
     remote.createEl("b", { text: "Konfliktversion" });
-    remote.createEl("div", { text: `${conflict.remotes[0].bytes.length} Bytes` });
+    remote.createDiv({ text: `${conflict.remotes[0].bytes.length} Bytes` });
   }
 
   async onClose(): Promise<void> {

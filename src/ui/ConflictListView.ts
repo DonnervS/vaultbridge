@@ -30,7 +30,7 @@ export class ConflictListView extends ItemView {
     const root = this.contentEl;
     root.empty();
     root.addClass("vb-cv-list");
-    root.createEl("div", { cls: "vb-cv-list-head", text: "Konflikte" });
+    root.createDiv({ cls: "vb-cv-list-head", text: "Konflikte" });
 
     const store = this.getStore();
     if (!store) {
