@@ -43,17 +43,18 @@ export function decodeSetup(str: string): SetupPayload {
   // Feld) soll trotzdem dekodieren. Das base64url-Alphabet enthält keinen
   // Whitespace, das Entfernen ist also verlustfrei.
   const raw = s.slice(idx + PREFIX.length).replace(/\s+/g, "");
-  let obj: any;
+  let parsed: unknown;
   try {
-    obj = JSON.parse(utf8.decode(base64urlToBytes(raw)));
+    parsed = JSON.parse(utf8.decode(base64urlToBytes(raw)));
   } catch {
     throw new Error("Setup-String beschädigt: Nutzlast konnte nicht dekodiert werden.");
   }
-  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Setup-String beschädigt: Nutzlast ist kein gültiges Objekt.");
   }
+  const obj = parsed as Record<string, unknown>;
   if (obj.v !== 1) {
-    throw new Error(`Nicht unterstützte Setup-Version: ${obj.v}`);
+    throw new Error(`Nicht unterstützte Setup-Version: ${String(obj.v)}`);
   }
   for (const field of REQUIRED) {
     if (obj[field] === undefined) {
@@ -61,10 +62,10 @@ export function decodeSetup(str: string): SetupPayload {
     }
   }
   if (obj.pp !== "embedded" && obj.pp !== "separate") {
-    throw new Error(`Setup-String ungültig: unbekannter Passphrase-Modus "${obj.pp}".`);
+    throw new Error(`Setup-String ungültig: unbekannter Passphrase-Modus "${String(obj.pp)}".`);
   }
   if (obj.pp === "embedded" && !obj.passphrase) {
     throw new Error("Setup-String: eingebetteter Modus, aber keine Passphrase enthalten.");
   }
-  return obj as SetupPayload;
+  return obj as unknown as SetupPayload;
 }

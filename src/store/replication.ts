@@ -15,11 +15,16 @@ export function startSync(
     retry: opts.live, // im Live-Modus mit Backoff erneut versuchen
   });
 
-  sync
+  // errText über einen unknown-Parameter: der Truthy-Check (err ? …) verengt err
+  // sonst auf {} (Default-toString -> no-base-to-string). Verhalten identisch zu
+  // String(err).
+  const errText = (err: unknown): string => String(err);
+
+  void sync
     .on("active", () => onStatus("active"))
-    .on("paused", (err?: unknown) => onStatus(err ? "error" : "paused", err ? String(err) : undefined))
+    .on("paused", (err?: unknown) => onStatus(err ? "error" : "paused", err ? errText(err) : undefined))
     .on("change", () => onStatus("active"))
-    .on("error", (err: unknown) => onStatus("error", String(err)))
+    .on("error", (err: unknown) => onStatus("error", errText(err)))
     .on("complete", () => onStatus("idle"));
 
   return {

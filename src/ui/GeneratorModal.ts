@@ -43,7 +43,7 @@ export class GeneratorModal extends Modal {
         "Wie ein Passwort behandeln.",
       cls: "mod-warning",
     });
-    warning.style.fontWeight = "bold";
+    warning.addClass("vaultbridge-bold");
 
     new Setting(contentEl)
       .setName("CouchDB-URL")
@@ -130,7 +130,7 @@ export class GeneratorModal extends Modal {
     ta.readOnly = true;
     ta.value = str;
     ta.rows = 6;
-    ta.style.width = "100%";
+    ta.addClass("vaultbridge-full-width");
     ta.addEventListener("focus", () => ta.select());
 
     // Aus den Einstellungen geöffnet: String direkt für DIESES Gerät übernehmen,
@@ -159,10 +159,11 @@ export class GeneratorModal extends Modal {
           await navigator.clipboard.writeText(str);
           new Notice("Setup-String kopiert.");
         } catch {
+          // Kein Fallback auf das veraltete document.execCommand mehr: das Feld
+          // ist bereits markiert, der Nutzer kann manuell kopieren.
           ta.focus();
           ta.select();
-          const ok = document.execCommand("copy");
-          new Notice(ok ? "Setup-String kopiert." : "Kopieren fehlgeschlagen. Bitte manuell markieren.");
+          new Notice("Kopieren nicht möglich. Text ist markiert — bitte manuell kopieren.");
         }
       }),
     );
@@ -174,9 +175,7 @@ export class GeneratorModal extends Modal {
       const dataUrl = await QRCode.toDataURL(str, { margin: 1, width: 512 });
       const img = out.createEl("img");
       img.src = dataUrl;
-      img.style.display = "block";
-      img.style.width = "256px";
-      img.style.maxWidth = "100%";
+      img.addClass("vaultbridge-qr");
 
       // QR-Code als PNG-Datei speichern, damit er an ein anderes Gerät
       // weitergegeben werden kann. ACHTUNG: Der QR enthält denselben
@@ -184,7 +183,7 @@ export class GeneratorModal extends Modal {
       new Setting(out).addButton((b) =>
         b.setButtonText("QR-Code speichern (PNG)").onClick(() => {
           try {
-            const a = document.createElement("a");
+            const a = createEl("a");
             a.href = dataUrl;
             a.download = "vaultbridge-setup-qr.png";
             a.click();

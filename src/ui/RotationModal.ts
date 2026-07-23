@@ -35,7 +35,7 @@ export class RotationModal extends Modal {
         "— während dieser Zeit ist die Synchronisierung pausiert.",
       cls: "mod-warning",
     });
-    warning.style.fontWeight = "bold";
+    warning.addClass("vaultbridge-bold");
 
     new Setting(contentEl).setName("Alte Passphrase").addText((t) => {
       t.inputEl.type = "password";

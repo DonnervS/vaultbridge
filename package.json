@@ -1,6 +1,6 @@
 {
   "name": "vaultbridge",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Ende-zu-Ende-verschlüsseltes Obsidian-Vault-Sync gegen CouchDB.",
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production && node scripts/verify-pouch-bundle.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "lint": "eslint \"src/**/*.ts\"",
     "make-setup": "node scripts/make-setup-string.mjs",
     "verify:bundle": "node scripts/verify-pouch-bundle.mjs"
   },
@@ -26,11 +27,14 @@
     "@types/qrcode": "^1.5.6",
     "builtin-modules": "^3.3.0",
     "esbuild": "^0.20.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-obsidianmd": "^0.4.1",
     "obsidian": "^1.4.11",
     "pouchdb-adapter-memory": "^9.0.0",
     "pouchdb-core": "^9.0.0",
     "pouchdb-replication": "^9.0.0",
     "typescript": "^5.4.0",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^1.4.0"
   },
   "dependencies": {
