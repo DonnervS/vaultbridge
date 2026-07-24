@@ -158,3 +158,80 @@ export function cloneRules(rules: SyncRules): SyncRules {
     rulesVersion: RULES_VERSION,
   };
 }
+
+/**
+ * Ob ein Regel-Eintrag GENAU diesen Pfad meint (und nicht bloß als Vorfahre
+ * eines Teilbaums). Grundlage, um „direkt ausgeschlossen" (eigener Eintrag,
+ * entfernbar) von „über den Elternordner ausgeschlossen" (Ausnahme nötig) zu
+ * unterscheiden. Globs zählen bewusst nicht als „exakt" — sie werden wie ein
+ * übergeordneter Ausschluss behandelt.
+ */
+function entryTargetsExactly(path: string, entry: string): boolean {
+  const e = normalizeEntry(entry);
+  if (e.length === 0 || isGlob(e)) return false;
+  if (path === e) return true; // exakter Pfad
+  if (!e.includes("/")) {
+    // Einzel-Segment: „exakt" nur, wenn es der Name DIESES Pfads ist (letztes
+    // Segment) — bei einem Vorfahren-Segment ist es ein Elternteil-Ausschluss.
+    const segs = path.split("/");
+    return segs[segs.length - 1] === e;
+  }
+  return false;
+}
+
+export type SyncRuleReason =
+  | "forced"             // hart ausgeschlossen (Vaultbridge-Self/Sidecar) oder versteckt bei syncHidden=aus
+  | "default"            // wird synchronisiert, kein Ausschluss betrifft ihn
+  | "included-exception" // wird synchronisiert, obwohl ein Ausschluss greift — eine Include-Ausnahme holt ihn zurück
+  | "excluded-self"      // nicht synchronisiert wegen eines EIGENEN Ausschluss-Eintrags (direkt entfernbar)
+  | "excluded-parent";   // nicht synchronisiert, weil ein übergeordneter Ordner/Glob ausgeschlossen ist
+
+export interface SyncRuleState {
+  synced: boolean;
+  reason: SyncRuleReason;
+}
+
+/**
+ * Bestimmt den Sync-Zustand eines Pfads für das kontextabhängige Menü. „forced"
+ * (nicht steuerbar), sonst je nachdem, ob und WIE der Pfad ein-/ausgeschlossen
+ * ist — daraus leitet das Menü Beschriftung und Aktion ab.
+ */
+export function syncRuleState(path: string, rules: SyncRules): SyncRuleState {
+  if (matchesAny(path, HARD_EXCLUDE)) return { synced: false, reason: "forced" };
+  if (isHidden(path) && !rules.syncHidden) return { synced: false, reason: "forced" };
+  if (shouldSync(path, rules)) {
+    if (matchesAny(path, rules.exclude) && matchesAny(path, rules.include)) {
+      return { synced: true, reason: "included-exception" };
+    }
+    return { synced: true, reason: "default" };
+  }
+  const selfExcluded = rules.exclude.some((e) => entryTargetsExactly(path, e));
+  return { synced: false, reason: selfExcluded ? "excluded-self" : "excluded-parent" };
+}
+
+/**
+ * Setzt für einen Pfad robust den gewünschten Sync-Zustand und gibt die
+ * angepassten Regeln zurück (das Original bleibt unverändert). Garantiert
+ * `shouldSync(path) === include` — unabhängig vom Ausgangszustand:
+ *  - Einschließen: eigene Ausschluss-Einträge dieses Pfads entfernen; greift dann
+ *    noch ein übergeordneter Ausschluss, eine Include-Ausnahme ergänzen.
+ *  - Ausschließen: Include-Ausnahmen dieses Pfads entfernen; wird er dann noch
+ *    synchronisiert, einen Ausschluss-Eintrag ergänzen.
+ * `forced`-Pfade (hart/hidden) lassen sich so NICHT einschließen — das prüft der
+ * Aufrufer über syncRuleState vorab.
+ */
+export function setInclusion(path: string, include: boolean, rules: SyncRules): SyncRules {
+  const next = cloneRules(rules);
+  if (include) {
+    next.exclude = next.exclude.filter((e) => !entryTargetsExactly(path, e));
+    if (!shouldSync(path, next) && !next.include.some((e) => normalizeEntry(e) === path)) {
+      next.include.push(path);
+    }
+  } else {
+    next.include = next.include.filter((e) => !entryTargetsExactly(path, e));
+    if (shouldSync(path, next) && !next.exclude.some((e) => normalizeEntry(e) === path)) {
+      next.exclude.push(path);
+    }
+  }
+  return next;
+}

@@ -33,11 +33,28 @@ export class VaultBridge {
     private readonly app: App,
     private readonly store: VaultStore,
     private readonly guard: EchoGuard,
-    private readonly rules: SyncRules,
+    // Nicht readonly: updateRules() ersetzt die Regeln zur Laufzeit (Kontextmenü).
+    private rules: SyncRules,
     private readonly getKnown: () => Map<string, string>,
     private readonly setKnown: (m: Map<string, string>) => void,
     private readonly onApplied?: (path: string) => void,
   ) {}
+
+  /**
+   * Übernimmt geänderte Sync-Regeln zur Laufzeit (Ein-/Ausschließen per
+   * Kontextmenü) und gleicht ab: neu eingeschlossene lokale Dateien hochladen,
+   * neu eingeschlossene Store-Notizen herunterladen, versteckte neu bewerten.
+   * Das Materialisierungs-Set wird geleert, damit reconcileFromStore alle
+   * Notizen erneut gegen die neuen Regeln prüft. Ausgeschlossene Daten bleiben
+   * bewusst liegen — kein Löschen (kein Datenverlust auf anderen Geräten).
+   */
+  async updateRules(rules: SyncRules): Promise<void> {
+    this.rules = rules;
+    this.materialized.clear();
+    await this.reconcileExisting();
+    await this.reconcileFromStore();
+    await this.reconcileHidden();
+  }
 
   start(): void {
     const vault = this.app.vault;
