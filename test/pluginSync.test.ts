@@ -17,4 +17,11 @@ describe("planPluginReload", () => {
   it("keine Plugin-Pfade -> leer", () => {
     expect(planPluginReload(["Notiz.md", ".claude/x"])).toEqual([]);
   });
+  it("respektiert einen umbenannten Konfigordner (configDir)", () => {
+    const ids = planPluginReload(
+      [".myconfig/plugins/dataview/main.js", ".myconfig/plugins/vaultbridge/main.js", ".obsidian/plugins/x/main.js"],
+      ".myconfig",
+    );
+    expect(ids).toEqual(["dataview"]); // vaultbridge raus; .obsidian-Pfad zählt bei .myconfig nicht
+  });
 });

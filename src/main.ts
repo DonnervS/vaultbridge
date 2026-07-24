@@ -336,7 +336,7 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   private promptPluginReload(): void {
-    const ids = planPluginReload([...this.pluginChanges]);
+    const ids = planPluginReload([...this.pluginChanges], this.app.vault.configDir);
     this.pluginChanges.clear();
     this.pluginReloadTimer = null;
     if (ids.length === 0) return;
