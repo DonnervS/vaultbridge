@@ -1,6 +1,6 @@
 {
   "name": "vaultbridge",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Ende-zu-Ende-verschlüsseltes Obsidian-Vault-Sync gegen CouchDB.",
   "type": "module",
   "scripts": {
@@ -25,7 +25,6 @@
     "@types/pouchdb": "^6.4.2",
     "@types/pouchdb-browser": "^6.1.5",
     "@types/qrcode": "^1.5.6",
-    "builtin-modules": "^3.3.0",
     "esbuild": "^0.20.0",
     "eslint": "^9.39.5",
     "eslint-plugin-obsidianmd": "^0.4.1",

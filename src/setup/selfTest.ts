@@ -13,6 +13,10 @@ const PROBE = "vaultbridge-selftest";
 export async function runSelfTest(
   payload: SetupPayload,
   passphrase: string,
+  // Bewusst das Browser-`fetch` (nicht Obsidians `requestUrl`): Der Selbsttest
+  // muss denselben `fetch`-Pfad ausüben, den PouchDB beim echten Sync nutzt —
+  // inklusive CORS. `requestUrl` würde CORS umgehen und den Test fälschlich
+  // bestehen lassen, während der reale Sync später an CORS scheitert.
   fetchFn: typeof fetch = fetch,
 ): Promise<SelfTestResult> {
   let cryptoResult = { ok: false, message: "" };
