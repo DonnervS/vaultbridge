@@ -9,13 +9,16 @@ import { DEFAULT_RULES, cloneRules } from "../vault/rules";
 import type { SyncMode } from "../store/syncModes";
 
 // Ordner/Dateien, die der "Plugins & Themes synchronisieren"-Schalter steuert.
-// Aus = diese Pfade werden ausgeschlossen; An = sie syncen (Standard).
-const PLUGIN_SYNC_PATHS = [
-  ".obsidian/plugins",
-  ".obsidian/themes",
-  ".obsidian/snippets",
-  ".obsidian/community-plugins.json",
-];
+// Aus = diese Pfade werden ausgeschlossen; An = sie syncen (Standard). Aus dem
+// echten configDir gebildet (der Nutzer kann Obsidians Konfigordner umbenennen).
+function pluginSyncPathsFor(configDir: string): string[] {
+  return [
+    `${configDir}/plugins`,
+    `${configDir}/themes`,
+    `${configDir}/snippets`,
+    `${configDir}/community-plugins.json`,
+  ];
+}
 
 export class VaultbridgeSettingsTab extends PluginSettingTab {
   plugin: VaultbridgePlugin;
@@ -105,7 +108,7 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Versteckte Dateien synchronisieren")
-      .setDesc("An = Dotfiles/-ordner (.claude, .hinote, .obsidian …) syncen mit. Aus = nur normale Notizen.")
+      .setDesc("An = Dotfiles/-ordner (.claude, .hinote, Obsidian-Konfigordner …) syncen mit. Aus = nur normale Notizen.")
       .addToggle((t) =>
         t.setValue(this.plugin.settings.rules.syncHidden).onChange(async (value) => {
           this.plugin.settings.rules.syncHidden = value;
@@ -170,15 +173,16 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       .setName("Plugins & Themes synchronisieren")
       .setDesc("An (Standard) verteilt Plugin-Code und -Einstellungen über alle Geräte. Vaultbridge selbst wird nie synchronisiert.")
       .addToggle((t) => {
+        const pluginSyncPaths = pluginSyncPathsFor(this.plugin.app.vault.configDir);
         const exclude = this.plugin.settings.rules.exclude;
-        const enabled = !PLUGIN_SYNC_PATHS.some((p) => exclude.includes(p));
+        const enabled = !pluginSyncPaths.some((p) => exclude.includes(p));
         t.setValue(enabled).onChange(async (value) => {
           if (value) {
             this.plugin.settings.rules.exclude = this.plugin.settings.rules.exclude.filter(
-              (p) => !PLUGIN_SYNC_PATHS.includes(p),
+              (p) => !pluginSyncPaths.includes(p),
             );
           } else {
-            for (const p of PLUGIN_SYNC_PATHS) {
+            for (const p of pluginSyncPaths) {
               if (!this.plugin.settings.rules.exclude.includes(p)) this.plugin.settings.rules.exclude.push(p);
             }
           }

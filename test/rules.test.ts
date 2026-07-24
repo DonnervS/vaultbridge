@@ -138,6 +138,54 @@ describe("rules – DEFAULT_RULES", () => {
   });
 });
 
+describe("configDir (nicht-standard Konfigordner)", () => {
+  // Der Nutzer kann Obsidians Konfigordner umbenennen (nicht immer ".obsidian").
+  // Die config-abhängigen Ausschlüsse müssen dann aus dem echten configDir gebildet
+  // werden — sonst würden geräte-lokale Dateien fälschlich gesynct oder umgekehrt.
+  const cd = ".myconfig";
+
+  it("configExclude greift für workspace/graph im umbenannten Konfigordner", () => {
+    expect(shouldSync(".myconfig/workspace.json", DEFAULT_RULES, cd)).toBe(false);
+    expect(shouldSync(".myconfig/workspace-mobile.json", DEFAULT_RULES, cd)).toBe(false);
+    expect(shouldSync(".myconfig/graph.json", DEFAULT_RULES, cd)).toBe(false);
+  });
+
+  it("hardExclude schützt Vaultbridge-Self im umbenannten Konfigordner", () => {
+    const permissive: SyncRules = { syncHidden: true, include: [], exclude: [] };
+    expect(shouldSync(".myconfig/plugins/vaultbridge/data.json", permissive, cd)).toBe(false);
+    expect(shouldSync(".myconfig/plugins/vaultbridge/main.js", permissive, cd)).toBe(false);
+  });
+
+  it("andere Plugins/Config-Dateien im umbenannten Konfigordner syncen weiterhin", () => {
+    expect(shouldSync(".myconfig/plugins/andere/main.js", DEFAULT_RULES, cd)).toBe(true);
+    expect(shouldSync(".myconfig/appearance.json", DEFAULT_RULES, cd)).toBe(true);
+  });
+
+  it("bei nicht-standard configDir ist .obsidian nur eine gewöhnliche Hidden-Datei (kein configExclude)", () => {
+    // configDir=".myconfig": ".obsidian/workspace.json" ist KEIN configExclude für
+    // diesen configDir -> synct wie jede andere versteckte Datei.
+    expect(shouldSync(".obsidian/workspace.json", DEFAULT_RULES, cd)).toBe(true);
+    // ... während der echte configDir greift:
+    expect(shouldSync(".myconfig/workspace.json", DEFAULT_RULES, cd)).toBe(false);
+  });
+
+  it("Standard-configDir (Default-Argument) schließt .obsidian/workspace + graph weiterhin aus", () => {
+    expect(shouldSync(".obsidian/workspace.json", DEFAULT_RULES)).toBe(false);
+    expect(shouldSync(".obsidian/graph.json", DEFAULT_RULES)).toBe(false);
+  });
+
+  it("syncRuleState/setInclusion reichen configDir korrekt durch", () => {
+    const base: SyncRules = { syncHidden: true, include: [], exclude: [], rulesVersion: RULES_VERSION };
+    // Vaultbridge-Self im umbenannten configDir -> forced (nicht steuerbar):
+    expect(syncRuleState(".myconfig/plugins/vaultbridge/main.js", base, cd).reason).toBe("forced");
+    // configExclude ohne eigenen Nutzer-Eintrag -> excluded-parent (nur per Include übersteuerbar):
+    expect(syncRuleState(".myconfig/workspace.json", base, cd)).toEqual({ synced: false, reason: "excluded-parent" });
+    // Include übersteuert den configExclude auch bei nicht-standard configDir:
+    const withInclude = setInclusion(".myconfig/workspace.json", true, base, cd);
+    expect(shouldSync(".myconfig/workspace.json", withInclude, cd)).toBe(true);
+  });
+});
+
 describe("matchesEntry", () => {
   it("normalisiert führendes ./ und abschließende /", () => {
     expect(matchesEntry("Dev/x.md", "./Dev/x.md")).toBe(true);
@@ -195,7 +243,9 @@ describe("migrateRules (v1 -> v2)", () => {
     const v2 = migrateRules(v1);
     expect(v2.exclude).toContain("node_modules");
     expect(v2.exclude).toContain("MeinGeheimordner");
-    expect(v2.exclude).toContain(".obsidian/workspace*.json"); // v2-Default dazu
+    expect(v2.exclude).toContain(".git"); // v2-Default dazu (workspace/graph laufen jetzt zur Laufzeit über configDir)
+    // Effektiv weiter ausgeschlossen: geräte-lokale Config-Dateien via configExcludes (Standard-configDir):
+    expect(shouldSync(".obsidian/workspace.json", v2)).toBe(false);
   });
 
   it("verwirft KEINEN Ausschluss, auch wenn er wie eine alte Include-Glob aussieht", () => {

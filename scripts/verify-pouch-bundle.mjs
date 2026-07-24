@@ -1,14 +1,13 @@
 import esbuild from "esbuild";
-import builtins from "builtin-modules";
 import vm from "node:vm";
-import { createRequire } from "node:module";
+import { createRequire, builtinModules } from "node:module";
 
 const require = createRequire(import.meta.url);
 
 // "events" wird NICHT ausgelagert, sondern gebündelt (browserfähiges Polyfill) —
 // muss identisch zur esbuild.config.mjs sein, sonst prüft der Test einen anderen
 // Bundle-Stand als das Release.
-const externalBuiltins = builtins.filter((m) => m !== "events");
+const externalBuiltins = builtinModules.filter((m) => m !== "events");
 
 const result = await esbuild.build({
   entryPoints: ["src/store/pouch.ts"],
@@ -27,7 +26,7 @@ const code = result.outputFiles[0].text;
 // von der Laufzeit bereitgestellt). Genau dieser Fall (require("events")) hat das
 // Laden auf dem iPhone verhindert und wurde vom reinen Lade-Test unten nicht
 // erkannt, weil die Node-Sandbox ein funktionierendes require("events") hat.
-const leakedBuiltin = builtins.find((m) => code.includes(`require("${m}")`));
+const leakedBuiltin = builtinModules.find((m) => code.includes(`require("${m}")`));
 if (leakedBuiltin) {
   console.error(
     `FEHLGESCHLAGEN: Bundle enthält require("${leakedBuiltin}") — dieser Node-Builtin ` +

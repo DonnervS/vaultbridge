@@ -12,21 +12,36 @@ export interface SyncRules {
 // Aktuelle Regel-Schema-Version. v2 = "alles syncen, ausschluss-basiert".
 export const RULES_VERSION = 2;
 
+// Fallback-configDir NUR für reine Logik-Aufrufer ohne Zugriff auf
+// app.vault.configDir (Unit-Tests / Nicht-Obsidian-Kontext). Zur Laufzeit reicht
+// main.ts IMMER den echten Vault#configDir durch; dieser Standardname wird nie
+// als echter Config-Pfad angenommen, sondern dient nur als Default-Sentinel.
+const DEFAULT_CONFIG_DIR = `.obsidian`;
+
 // Nie synchronisieren (nicht abschaltbar): Vaultbridge' eigenes Verzeichnis
-// und die Konflikt-Sidecar-Dateien.
-const HARD_EXCLUDE = [".obsidian/plugins/vaultbridge/**", "*.vaultbridge-konflikt", "**/*.vaultbridge-konflikt"];
+// und die Konflikt-Sidecar-Dateien. Aus dem echten configDir gebildet, weil der
+// Nutzer den Obsidian-Konfigordner umbenennen kann (nicht immer ".obsidian").
+function hardExcludeFor(configDir: string): string[] {
+  return [`${configDir}/plugins/vaultbridge/**`, "*.vaultbridge-konflikt", "**/*.vaultbridge-konflikt"];
+}
+
+// Geräte-lokale Obsidian-Config-Dateien, die IMMER ausgeschlossen sind (Sync
+// würde nur Konflikt-Churn erzeugen). Aus dem echten configDir gebildet.
+function configExcludesFor(configDir: string): string[] {
+  return [`${configDir}/workspace*.json`, `${configDir}/graph.json`];
+}
 
 // Modell (v2): Standardmäßig wird ALLES synchronisiert — normale Notizen wie
 // auch versteckte Dateien/Ordner (z. B. .claude, .hinote), sofern der Toggle
 // `syncHidden` an ist. Gesteuert wird über AUSSCHLÜSSE. Die wenigen Defaults
 // unten sind Dateien, die geräte-lokal/transient sind und beim Syncen aktiv
 // Konflikt-Churn erzeugen würden — allesamt in den Einstellungen editierbar.
+// Die configDir-abhängigen Config-Dateien (workspace/graph) stehen NICHT mehr
+// hier, sondern kommen zur Laufzeit über configExcludesFor(configDir) dazu.
 export const DEFAULT_RULES: SyncRules = {
   syncHidden: true,
   include: [],
   exclude: [
-    ".obsidian/workspace*.json", // geräte-lokaler Fenster-/UI-Zustand
-    ".obsidian/graph.json",      // geräte-lokale Graph-Ansicht
     ".git",                      // Git-Interna — Datei-Sync würde Repos beschädigen (überall)
     ".trash",                    // Obsidian-Papierkorb (überall)
     ".DS_Store",                 // macOS-Metadaten (überall)
@@ -106,12 +121,11 @@ function matchesAny(path: string, entries: string[]): boolean {
  *     Include-Eintrag holt sie ausdrücklich wieder herein.
  *  4. Sonst: synchronisieren (Default = alles).
  */
-export function shouldSync(path: string, rules: SyncRules): boolean {
-  if (matchesAny(path, HARD_EXCLUDE)) return false;
+export function shouldSync(path: string, rules: SyncRules, configDir = DEFAULT_CONFIG_DIR): boolean {
+  if (matchesAny(path, hardExcludeFor(configDir))) return false;
   if (isHidden(path) && !rules.syncHidden) return false;
-  if (matchesAny(path, rules.exclude)) {
-    return matchesAny(path, rules.include); // Include überschreibt Exclude
-  }
+  const excluded = matchesAny(path, rules.exclude) || matchesAny(path, configExcludesFor(configDir));
+  if (excluded) return matchesAny(path, rules.include); // Include überschreibt jeden Ausschluss
   return true;
 }
 
@@ -121,7 +135,8 @@ export function shouldSync(path: string, rules: SyncRules): boolean {
  * Ausnahmen gibt, die etwas im Ordner wieder hereinholen könnten. Reines Perf-
  * Hilfsmittel — es ändert nie, WELCHE Dateien am Ende synchronisiert werden.
  */
-export function folderIsExcluded(folderPath: string, rules: SyncRules): boolean {
+export function folderIsExcluded(folderPath: string, rules: SyncRules, configDir = DEFAULT_CONFIG_DIR): boolean {
+  void configDir; // Signatur-Konsistenz: configExcludes sind Datei-Globs, hardExclude ein Glob — beide prunen NIE Ordner.
   if (rules.include.length > 0) return false;
   // Nur Nicht-Glob-Einträge haben garantierte Teilbaum-Semantik. Ein Glob wie
   // `Dev/*` kann den Ordner `Dev/x` treffen, ohne dessen Nachfahren
@@ -196,15 +211,19 @@ export interface SyncRuleState {
  * (nicht steuerbar), sonst je nachdem, ob und WIE der Pfad ein-/ausgeschlossen
  * ist — daraus leitet das Menü Beschriftung und Aktion ab.
  */
-export function syncRuleState(path: string, rules: SyncRules): SyncRuleState {
-  if (matchesAny(path, HARD_EXCLUDE)) return { synced: false, reason: "forced" };
+export function syncRuleState(path: string, rules: SyncRules, configDir = DEFAULT_CONFIG_DIR): SyncRuleState {
+  if (matchesAny(path, hardExcludeFor(configDir))) return { synced: false, reason: "forced" };
   if (isHidden(path) && !rules.syncHidden) return { synced: false, reason: "forced" };
-  if (shouldSync(path, rules)) {
-    if (matchesAny(path, rules.exclude) && matchesAny(path, rules.include)) {
+  if (shouldSync(path, rules, configDir)) {
+    const anyExclude = matchesAny(path, rules.exclude) || matchesAny(path, configExcludesFor(configDir));
+    if (anyExclude && matchesAny(path, rules.include)) {
       return { synced: true, reason: "included-exception" };
     }
     return { synced: true, reason: "default" };
   }
+  // „excluded-self" nur bei einem EIGENEN, exakt passenden Nutzer-Ausschluss;
+  // configExcludes stehen nicht in rules.exclude → sie zählen als „parent"
+  // (der Nutzer kann sie nicht aus seiner Liste entfernen, nur per Include übersteuern).
   const selfExcluded = rules.exclude.some((e) => entryTargetsExactly(path, e));
   return { synced: false, reason: selfExcluded ? "excluded-self" : "excluded-parent" };
 }
@@ -220,16 +239,16 @@ export function syncRuleState(path: string, rules: SyncRules): SyncRuleState {
  * `forced`-Pfade (hart/hidden) lassen sich so NICHT einschließen — das prüft der
  * Aufrufer über syncRuleState vorab.
  */
-export function setInclusion(path: string, include: boolean, rules: SyncRules): SyncRules {
+export function setInclusion(path: string, include: boolean, rules: SyncRules, configDir = DEFAULT_CONFIG_DIR): SyncRules {
   const next = cloneRules(rules);
   if (include) {
     next.exclude = next.exclude.filter((e) => !entryTargetsExactly(path, e));
-    if (!shouldSync(path, next) && !next.include.some((e) => normalizeEntry(e) === path)) {
+    if (!shouldSync(path, next, configDir) && !next.include.some((e) => normalizeEntry(e) === path)) {
       next.include.push(path);
     }
   } else {
     next.include = next.include.filter((e) => !entryTargetsExactly(path, e));
-    if (shouldSync(path, next) && !next.exclude.some((e) => normalizeEntry(e) === path)) {
+    if (shouldSync(path, next, configDir) && !next.exclude.some((e) => normalizeEntry(e) === path)) {
       next.exclude.push(path);
     }
   }

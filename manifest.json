@@ -1,7 +1,7 @@
 {
   "id": "vaultbridge",
   "name": "Vaultbridge",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "minAppVersion": "1.7.2",
   "description": "End-to-end encrypted vault sync to your own CouchDB, with a conflict diff view, one-string setup, and mobile support.",
   "author": "Markus Wenzel",

@@ -209,6 +209,7 @@ export default class VaultbridgePlugin extends Plugin {
         store,
         guard,
         this.settings.rules ?? DEFAULT_RULES,
+        this.app.vault.configDir,
         () => new Map(Object.entries(this.settings.known ?? {})),
         (m) => {
           this.settings.known = Object.fromEntries(m);
@@ -328,7 +329,7 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   private onHiddenApplied(path: string): void {
-    if (!path.startsWith(".obsidian/plugins/")) return;
+    if (!path.startsWith(`${this.app.vault.configDir}/plugins/`)) return;
     this.pluginChanges.add(path);
     if (this.pluginReloadTimer !== null) window.clearTimeout(this.pluginReloadTimer);
     this.pluginReloadTimer = window.setTimeout(() => this.promptPluginReload(), 3000);
@@ -593,7 +594,7 @@ export default class VaultbridgePlugin extends Plugin {
    */
   private addSyncMenuItem(menu: Menu, file: TAbstractFile): void {
     const path = file.path;
-    const state = syncRuleState(path, this.settings.rules);
+    const state = syncRuleState(path, this.settings.rules, this.app.vault.configDir);
     if (state.reason === "forced") return;
 
     menu.addItem((item) => {
@@ -616,7 +617,7 @@ export default class VaultbridgePlugin extends Plugin {
    * greift die Regel beim nächsten Verbinden.
    */
   private async setSyncInclusion(path: string, include: boolean): Promise<void> {
-    this.settings.rules = setInclusion(path, include, this.settings.rules);
+    this.settings.rules = setInclusion(path, include, this.settings.rules, this.app.vault.configDir);
     await this.saveSettings();
     if (this.bridge) {
       await this.bridge.updateRules(this.settings.rules);

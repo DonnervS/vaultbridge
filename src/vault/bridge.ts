@@ -35,6 +35,9 @@ export class VaultBridge {
     private readonly guard: EchoGuard,
     // Nicht readonly: updateRules() ersetzt die Regeln zur Laufzeit (Kontextmenü).
     private rules: SyncRules,
+    // Obsidians echter Konfigordner (app.vault.configDir) — meist ".obsidian",
+    // aber vom Nutzer umbenennbar. Steuert die config-abhängigen Ausschlüsse.
+    private readonly configDir: string,
     private readonly getKnown: () => Map<string, string>,
     private readonly setKnown: (m: Map<string, string>) => void,
     private readonly onApplied?: (path: string) => void,
@@ -61,7 +64,7 @@ export class VaultBridge {
 
     const onLocalWrite = async (file: TFile) => {
       try {
-        if (!shouldSync(file.path, this.rules)) return;
+        if (!shouldSync(file.path, this.rules, this.configDir)) return;
         const bytes = new Uint8Array(await vault.readBinary(file));
         if (this.guard.isEcho(file.path, await contentHash(bytes))) return; // eigene Remote-Schreibung
         await this.store.putFile(file.path, bytes, this.metaOf(file));
@@ -71,7 +74,7 @@ export class VaultBridge {
     };
     const onLocalDelete = async (file: TAbstractFile) => {
       try {
-        if (!shouldSync(file.path, this.rules)) return;
+        if (!shouldSync(file.path, this.rules, this.configDir)) return;
         if (this.guard.isEcho(file.path, DELETE_SENTINEL)) return; // eigene Remote-Löschung
         await this.store.deleteFile(file.path);
       } catch (e) {
@@ -109,7 +112,7 @@ export class VaultBridge {
   private async reconcileExisting(): Promise<void> {
     for (const file of this.app.vault.getFiles()) {
       try {
-        if (!shouldSync(file.path, this.rules)) continue;
+        if (!shouldSync(file.path, this.rules, this.configDir)) continue;
         const bytes = new Uint8Array(await this.app.vault.readBinary(file));
         const existing = await this.store.getFile(file.path);
         if (existing && (await contentHash(existing.bytes)) === (await contentHash(bytes))) {
@@ -189,7 +192,7 @@ export class VaultBridge {
     try {
       const note = await this.store.readNote(id);
       if (!note) return;
-      if (!shouldSync(note.path, this.rules)) return;
+      if (!shouldSync(note.path, this.rules, this.configDir)) return;
 
       if (isHidden(note.path)) {
         const adapter = this.app.vault.adapter;
@@ -307,11 +310,11 @@ export class VaultBridge {
         const adapter = this.app.vault.adapter;
         // Ausgeschlossene Ordner (z. B. node_modules) beim Scan gar nicht erst
         // betreten — spart bei großen Dev-Ordnern viel Zeit.
-        const allPaths = await listAllFiles(adapter, "", (folder) => !folderIsExcluded(folder, this.rules));
+        const allPaths = await listAllFiles(adapter, "", (folder) => !folderIsExcluded(folder, this.rules, this.configDir));
         const local = new Map<string, string>();
         const errored = new Set<string>();
         for (const path of allPaths) {
-          if (!isHidden(path) || !shouldSync(path, this.rules)) continue;
+          if (!isHidden(path) || !shouldSync(path, this.rules, this.configDir)) continue;
           try {
             const bytes = new Uint8Array(await adapter.readBinary(path));
             local.set(path, await contentHash(bytes));
@@ -323,11 +326,11 @@ export class VaultBridge {
         }
         const storeAll = await this.store.pathHashes();
         const store = new Map<string, string>();
-        for (const [p, h] of storeAll) if (isHidden(p) && shouldSync(p, this.rules)) store.set(p, h);
+        for (const [p, h] of storeAll) if (isHidden(p) && shouldSync(p, this.rules, this.configDir)) store.set(p, h);
         const knownRaw = this.getKnown();
         const known = new Map<string, string>();
         for (const [p, h] of knownRaw) {
-          if (isHidden(p) && shouldSync(p, this.rules) && !errored.has(p)) known.set(p, h);
+          if (isHidden(p) && shouldSync(p, this.rules, this.configDir) && !errored.has(p)) known.set(p, h);
         }
         const plan = planHiddenSync(local, known, store);
         for (const path of plan.uploads) {
