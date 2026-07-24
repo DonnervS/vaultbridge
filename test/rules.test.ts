@@ -6,6 +6,8 @@ import {
   folderIsExcluded,
   migrateRules,
   cloneRules,
+  syncRuleState,
+  setInclusion,
   DEFAULT_RULES,
   RULES_VERSION,
   SyncRules,
@@ -226,5 +228,78 @@ describe("cloneRules", () => {
     const c = cloneRules(src);
     expect(c.include).not.toBe(src.include);
     expect(c.rulesVersion).toBe(RULES_VERSION);
+  });
+});
+
+describe("syncRuleState (Kontextmenü-Zustand)", () => {
+  const base: SyncRules = { syncHidden: true, include: [], exclude: [], rulesVersion: RULES_VERSION };
+
+  it("normaler Pfad -> default (wird gesynct)", () => {
+    expect(syncRuleState("Projekte/A.md", base)).toEqual({ synced: true, reason: "default" });
+  });
+
+  it("eigener Ausschluss-Eintrag -> excluded-self", () => {
+    const r = { ...base, exclude: ["Projekte/Geheim"] };
+    expect(syncRuleState("Projekte/Geheim", r)).toEqual({ synced: false, reason: "excluded-self" });
+  });
+
+  it("über den Elternordner ausgeschlossen -> excluded-parent", () => {
+    const r = { ...base, exclude: ["Projekte"] };
+    expect(syncRuleState("Projekte/Unter/x.md", r)).toEqual({ synced: false, reason: "excluded-parent" });
+  });
+
+  it("Include-Ausnahme trotz Elternausschluss -> included-exception", () => {
+    const r = { ...base, exclude: ["Projekte"], include: ["Projekte/Wichtig.md"] };
+    expect(syncRuleState("Projekte/Wichtig.md", r)).toEqual({ synced: true, reason: "included-exception" });
+  });
+
+  it("Vaultbridge-eigenes Verzeichnis + Sidecar -> forced", () => {
+    expect(syncRuleState(".obsidian/plugins/vaultbridge/main.js", base).reason).toBe("forced");
+    expect(syncRuleState("Notiz.md.vaultbridge-konflikt", base).reason).toBe("forced");
+  });
+
+  it("versteckte Datei bei syncHidden=aus -> forced", () => {
+    expect(syncRuleState(".claude/x.md", { ...base, syncHidden: false }).reason).toBe("forced");
+  });
+});
+
+describe("setInclusion (robustes Ein-/Ausschließen)", () => {
+  const base: SyncRules = { syncHidden: true, include: [], exclude: [], rulesVersion: RULES_VERSION };
+
+  it("ausschließen fügt einen Ausschluss-Eintrag hinzu", () => {
+    const r = setInclusion("Projekte/Geheim", false, base);
+    expect(shouldSync("Projekte/Geheim", r)).toBe(false);
+    expect(shouldSync("Projekte/Geheim/tief.md", r)).toBe(false); // Teilbaum mit
+  });
+
+  it("einschließen eines eigenen Ausschlusses entfernt den Eintrag", () => {
+    const r = setInclusion("Projekte/Geheim", true, { ...base, exclude: ["Projekte/Geheim"] });
+    expect(shouldSync("Projekte/Geheim", r)).toBe(true);
+    expect(r.exclude).not.toContain("Projekte/Geheim");
+  });
+
+  it("einschließen bei Elternausschluss ergänzt eine Include-Ausnahme (Kernfall)", () => {
+    const r = setInclusion("Projekte/Wichtig.md", true, { ...base, exclude: ["Projekte"] });
+    expect(shouldSync("Projekte/Wichtig.md", r)).toBe(true);
+    expect(shouldSync("Projekte/Anderes.md", r)).toBe(false); // Rest bleibt ausgeschlossen
+    expect(r.include).toContain("Projekte/Wichtig.md");
+  });
+
+  it("ausschließen hebt eine bestehende Include-Ausnahme auf", () => {
+    const r = setInclusion("Projekte/Wichtig.md", false, { ...base, exclude: ["Projekte"], include: ["Projekte/Wichtig.md"] });
+    expect(shouldSync("Projekte/Wichtig.md", r)).toBe(false);
+    expect(r.include).not.toContain("Projekte/Wichtig.md");
+  });
+
+  it("lässt das Original unverändert (rein)", () => {
+    const src = cloneRules(base);
+    setInclusion("X", false, src);
+    expect(src.exclude).toEqual([]);
+  });
+
+  it("ist idempotent (zweimal ausschließen erzeugt keinen Doppel-Eintrag)", () => {
+    const once = setInclusion("A/B", false, base);
+    const twice = setInclusion("A/B", false, once);
+    expect(twice.exclude.filter((e) => e === "A/B").length).toBe(1);
   });
 });

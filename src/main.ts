@@ -1,4 +1,4 @@
-import { EventRef, Notice, Platform, Plugin } from "obsidian";
+import { EventRef, Menu, Notice, Platform, Plugin, TAbstractFile } from "obsidian";
 import { VaultbridgeSettingsTab } from "./ui/SettingsTab";
 import { StatusBar } from "./ui/StatusBar";
 import { decodeSetup, encodeSetup } from "./setup/setupString";
@@ -9,7 +9,7 @@ import { VaultStore } from "./store/store";
 import { startSync, SyncHandle, SyncStatus } from "./store/replication";
 import { EchoGuard } from "./vault/applyChange";
 import { VaultBridge } from "./vault/bridge";
-import { DEFAULT_RULES, SyncRules, migrateRules } from "./vault/rules";
+import { DEFAULT_RULES, SyncRules, migrateRules, syncRuleState, setInclusion } from "./vault/rules";
 import { promptPassphrase } from "./ui/PassphrasePromptModal";
 import { ConflictListView, VIEW_TYPE_CONFLICTS } from "./ui/ConflictListView";
 import { ConflictDiffView, VIEW_TYPE_CONFLICT_DIFF } from "./ui/ConflictDiffView";
@@ -168,6 +168,12 @@ export default class VaultbridgePlugin extends Plugin {
     // Regelmäßiger Abgleich versteckter Dateien (Dotfiles/.claude/Plugins):
     // diese lösen keine indizierten Vault-Events aus, daher periodisches Polling.
     this.registerInterval(window.setInterval(() => { if (!this.rotating) void this.bridge?.reconcileHidden(); }, 30000));
+
+    // Kontextmenü im Dateibaum: Ordner/Datei direkt vom Sync aus- oder wieder
+    // einschließen (kontextabhängig je nach aktuellem Regel-Zustand).
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => this.addSyncMenuItem(menu, file)),
+    );
 
     // Autostart: nach dem Aufbau des Workspace automatisch verbinden, sofern
     // aktiviert und ein Setup-String hinterlegt ist. onLayoutReady stellt sicher,
@@ -576,6 +582,50 @@ export default class VaultbridgePlugin extends Plugin {
     this.renderConflictDiff();
     this.renderConflictList(); // Markierung des aktiven Eintrags
     void this.app.workspace.revealLeaf(diffLeaf);
+  }
+
+  /**
+   * Fügt dem Rechtsklick-Menü eines Ordners/einer Datei im Dateibaum einen
+   * kontextabhängigen Vaultbridge-Eintrag hinzu: je nach aktuellem Regel-Zustand
+   * ausschließen, aufnehmen oder (bei ausgeschlossenem Elternordner) als Ausnahme
+   * trotzdem synchronisieren. „forced"-Pfade (Vaultbridge-intern, oder versteckt
+   * bei abgeschaltetem Hidden-Sync) bekommen keinen Eintrag.
+   */
+  private addSyncMenuItem(menu: Menu, file: TAbstractFile): void {
+    const path = file.path;
+    const state = syncRuleState(path, this.settings.rules);
+    if (state.reason === "forced") return;
+
+    menu.addItem((item) => {
+      if (state.synced) {
+        item.setTitle("Von Vaultbridge-Sync ausschließen").setIcon("cloud-off");
+        item.onClick(() => void this.setSyncInclusion(path, false));
+      } else if (state.reason === "excluded-parent") {
+        item.setTitle("Trotzdem mit Vaultbridge synchronisieren").setIcon("cloud");
+        item.onClick(() => void this.setSyncInclusion(path, true));
+      } else {
+        item.setTitle("In Vaultbridge-Sync aufnehmen").setIcon("cloud");
+        item.onClick(() => void this.setSyncInclusion(path, true));
+      }
+    });
+  }
+
+  /**
+   * Setzt den Sync-Ein-/Ausschluss für einen Pfad, speichert die Regeln und
+   * gleicht bei bestehender Verbindung sofort ab (updateRules). Ohne Verbindung
+   * greift die Regel beim nächsten Verbinden.
+   */
+  private async setSyncInclusion(path: string, include: boolean): Promise<void> {
+    this.settings.rules = setInclusion(path, include, this.settings.rules);
+    await this.saveSettings();
+    if (this.bridge) {
+      await this.bridge.updateRules(this.settings.rules);
+      new Notice(include
+        ? `Vaultbridge: „${path}" wird synchronisiert.`
+        : `Vaultbridge: „${path}" vom Sync ausgeschlossen (bleibt lokal erhalten).`);
+    } else {
+      new Notice("Vaultbridge: Regel gespeichert — wirkt beim nächsten Verbinden.");
+    }
   }
 
   /**
