@@ -109,7 +109,7 @@ export class VaultBridge {
         if (!shouldSync(file.path, this.rules, this.configDir)) return;
         if (!this.initialUploadDone) { this.queuedDeletes.add(file.path); return; }
         if (this.guard.isEcho(file.path, DELETE_SENTINEL)) return; // eigene Remote-Löschung
-        await this.store.deleteFile(file.path);
+        await this.store.deleteFile(file.path, this.getDeviceName());
       } catch (e) {
         new Notice(`Vaultbridge: Löschfehler bei ${file.path}: ${String(e)}`);
       }
@@ -159,7 +159,7 @@ export class VaultBridge {
       // Pulls gelöscht und wieder angelegt worden sein.
       if (!this.app.vault.getAbstractFileByPath(path)) {
         try {
-          await this.store.deleteFile(path);
+          await this.store.deleteFile(path, this.getDeviceName());
         } catch (e) {
           new Notice(`Vaultbridge: Löschung konnte nicht nachgeholt werden (${path}): ${String(e)}`);
         }
@@ -465,7 +465,7 @@ export class VaultBridge {
         }
         for (const path of plan.deleteRemotes) {
           if (this.pendingHiddenDeletes.has(path)) {
-            await this.store.deleteFile(path);
+            await this.store.deleteFile(path, this.getDeviceName());
             this.pendingHiddenDeletes.delete(path);
           } else {
             this.pendingHiddenDeletes.add(path); // erst in der nächsten Runde löschen

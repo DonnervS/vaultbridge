@@ -32,7 +32,7 @@ describe("VaultStore.pathHashes", () => {
     const store = await makeStore();
     await store.putFile("weg.md", utf8.encode("x"), meta);
     await store.putFile("bleibt.md", utf8.encode("y"), meta);
-    await store.deleteFile("weg.md");
+    await store.deleteFile("weg.md", "Laptop");
 
     const hashes = await store.pathHashes();
     expect(hashes.has("weg.md")).toBe(false);

@@ -1,5 +1,5 @@
 import { VaultKeys, pathId } from "../crypto/crypto";
-import { encodeFile, decodeFile } from "./transform";
+import { encodeFile, decodeFile, encodeMeta, decodeMeta } from "./transform";
 import { NoteDoc, ChunkDoc, FileMeta } from "./model";
 import { contentHash } from "../vault/applyChange";
 import { MARKER_ID, EpochMarker } from "../crypto/rotation";
@@ -95,10 +95,49 @@ export class VaultStore {
     return decoded ? { bytes: decoded.bytes, meta: decoded.meta } : null;
   }
 
-  async deleteFile(path: string): Promise<void> {
+  /**
+   * Entschlüsselt NUR die Metadaten einer Notiz und meldet mit, welcher
+   * Schlüssel des Rings dafür gepasst hat. Nötig für das Umschreiben der
+   * Metadaten an Ort und Stelle (deleteFile): der Rest des Dokuments — vor
+   * allem path_enc — bleibt mit dem alten Schlüssel verschlüsselt, das neue
+   * meta_enc muss deshalb mit DEMSELBEN Schlüssel entstehen. Sonst wäre das
+   * Dokument mit keinem Schlüssel mehr als Ganzes lesbar.
+   */
+  private async tryDecodeMeta(note: NoteDoc): Promise<{ meta: FileMeta; keys: VaultKeys } | null> {
+    for (const k of this.keyring) {
+      try {
+        return { meta: await decodeMeta(k, note), keys: k };
+      } catch {
+        /* falscher Schlüssel -> nächster Kandidat */
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Weiche Löschung: das Dokument bleibt bestehen und wird als gelöscht
+   * markiert (deleted, keine Chunks). Die Metadaten werden dabei NEU
+   * geschrieben — mit dem Zeitpunkt dieser Löschung und dem löschenden Gerät.
+   *
+   * Ohne das erbte die Löschung Zeitstempel und Gerät der letzten INHALTS-
+   * änderung: „der neuere gewinnt" entschiede dann anhand eines fremden,
+   * früheren Schreibvorgangs, und die Konfliktansicht schriebe die Löschung
+   * dem falschen Gerät zu.
+   */
+  async deleteFile(path: string, device: string): Promise<void> {
     const id = await pathId(this.keys.idKey, path);
     const note = await this.getRaw<NoteDoc>(id);
     if (!note) return;
+    const decoded = await this.tryDecodeMeta(note);
+    // Nicht entschlüsselbar (fremder Schlüssel): dann bleiben die alten
+    // Metadaten stehen. Die Löschung selbst ist wichtiger als ihre Zuordnung.
+    if (decoded) {
+      note.meta_enc = await encodeMeta(decoded.keys, {
+        ...decoded.meta,
+        device,
+        changedAt: Date.now(),
+      });
+    }
     note.deleted = true;
     note.chunks = [];
     await this.db.put(note);
