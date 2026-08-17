@@ -15,6 +15,9 @@ export interface ConflictVersion {
   rev: string;
   bytes: Uint8Array;
   meta: FileMeta;
+  /** Ist dieser Zweig eine Löschung? Zwei Zweige mit gleichem (leeren) Inhalt,
+   *  aber unterschiedlichem Flag sind NICHT dasselbe. */
+  deleted: boolean;
 }
 
 export interface FileRevision {
@@ -131,10 +134,11 @@ export class VaultStore {
   async readNoteRev(
     id: string,
     rev: string,
-  ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta } | null> {
+  ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta; deleted: boolean } | null> {
     try {
       const note = await this.db.get<NoteDoc>(id, { rev });
-      return await this.tryDecode(note);
+      const decoded = await this.tryDecode(note);
+      return decoded ? { ...decoded, deleted: !!note.deleted } : null;
     } catch {
       return null;
     }
@@ -182,13 +186,13 @@ export class VaultStore {
     const remotes: ConflictVersion[] = [];
     for (const rev of winning._conflicts) {
       const version = await this.readNoteRev(id, rev);
-      if (version) remotes.push({ rev, bytes: version.bytes, meta: version.meta });
+      if (version) remotes.push({ rev, bytes: version.bytes, meta: version.meta, deleted: version.deleted });
     }
     return {
       id,
       path: local.path,
       isBinary: local.meta.isBinary,
-      local: { rev: winning._rev, bytes: local.bytes, meta: local.meta },
+      local: { rev: winning._rev, bytes: local.bytes, meta: local.meta, deleted: !!winning.deleted },
       remotes,
     };
   }
@@ -217,6 +221,38 @@ export class VaultStore {
       }
     }
     if (pruneError) throw toError(pruneError);
+  }
+
+  /**
+   * Verwirft Konfliktzweige, OHNE eine neue Revision zu schreiben. Für den Fall,
+   * dass die Zweige inhaltsgleich sind — dann ist Neuschreiben nicht nur
+   * überflüssig, sondern schädlich: zwei Geräte, die gleichzeitig auflösen,
+   * erzeugen damit sofort den nächsten Konflikt. Ein 404 gilt als Erfolg
+   * (bereits von einem anderen Gerät entfernt).
+   *
+   * Ein 409 gilt hier ebenfalls als Erfolg: `db.remove(id, rev)` schlägt mit
+   * "conflict" fehl, wenn `rev` nicht mehr die Spitze seines Zweigs ist — und
+   * genau das ist der Fall, wenn dieser Zweig bereits (von diesem oder einem
+   * anderen Gerät) entfernt wurde. Da hier ausschließlich bekannte
+   * Konfliktzweig-Revisionen übergeben werden, kann ein 409 an dieser Stelle
+   * nur "schon erledigt" bedeuten, nie einen echten Schreibkonflikt mit neuem
+   * Inhalt — sonst wäre `pruneConflictRevs` bei zweimaligem Aufruf mit
+   * denselben Revisionen nicht idempotent (empirisch verifiziert gegen
+   * pouchdb-adapter-memory).
+   */
+  async pruneConflictRevs(id: string, revs: string[]): Promise<void> {
+    let firstError: unknown = null;
+    for (const rev of revs) {
+      try {
+        await this.db.remove(id, rev);
+      } catch (e) {
+        const status = (e as { status?: number }).status;
+        const name = (e as { name?: string }).name;
+        if (status === 404 || name === "not_found" || status === 409 || name === "conflict") continue;
+        firstError = firstError ?? e;
+      }
+    }
+    if (firstError) throw toError(firstError);
   }
 
   async pathHashes(): Promise<Map<string, string>> {
