@@ -70,7 +70,11 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Gerätename")
-      .setDesc("Name dieses Geräts im Sync.")
+      .setDesc(
+        "Wird bei jeder Änderung mitgespeichert (verschlüsselt) und in der Konfliktansicht angezeigt, " +
+          "damit du siehst, auf welchem Gerät eine Abweichung entstanden ist. Beim ersten Verbinden " +
+          "automatisch vorbelegt.",
+      )
       .addText((t) =>
         t.setValue(this.plugin.settings.deviceName).onChange(async (value) => {
           this.plugin.settings.deviceName = value;

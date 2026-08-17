@@ -20,6 +20,7 @@ import { GeneratorModal } from "./ui/GeneratorModal";
 import { HistoryModal } from "./ui/HistoryModal";
 import { makeVerifyToken, checkVerifyToken, needsAdoption } from "./crypto/rotation";
 import { initialPullKey } from "./store/initialSync";
+import { defaultDeviceName, randomDeviceSuffix } from "./setup/deviceName";
 
 export interface VaultbridgeSettings {
   setupString: string;
@@ -242,6 +243,28 @@ export default class VaultbridgePlugin extends Plugin {
       this.store = store;
       const guard = new EchoGuard();
       this.currentPullKey = initialPullKey(payload.couchUrl, payload.db);
+      // Erst beim Verbinden vorbelegen, nicht beim Laden: hier steht fest, dass
+      // das Gerät wirklich am Sync teilnimmt, und der Name landet ab sofort in
+      // jeder geschriebenen Datei.
+      if (!this.settings.deviceName) {
+        this.settings.deviceName = defaultDeviceName(
+          {
+            isMacOS: Platform.isMacOS,
+            isWin: Platform.isWin,
+            isIosApp: Platform.isIosApp,
+            isAndroidApp: Platform.isAndroidApp,
+            isTablet: Platform.isTablet,
+          },
+          randomDeviceSuffix(),
+        );
+        await this.saveSettings();
+        // saveSettings() ist echtes Disk-I/O (siehe unten) — also ein neuer
+        // await-Punkt wie jeder andere in dieser Runde. ownBridge existiert an
+        // dieser Stelle noch nicht (wird erst unten gesetzt), daher hier wie
+        // bei den beiden vorherigen Prüfungen (Passphrase-Prompt, deriveKeys)
+        // ohne abandon() — es gibt noch nichts abzuräumen.
+        if (stale()) return;
+      }
       this.bridge = new VaultBridge(
         this.app,
         store,
