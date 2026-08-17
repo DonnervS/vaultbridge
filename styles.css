@@ -148,3 +148,10 @@
 .vb-cv-item-devices { color: var(--text-faint); font-size: 0.75em; line-height: 1.3; margin-top: 2px; }
 .vb-diff-head-sub { color: var(--text-muted); font-weight: 400; font-size: 0.9em; }
 .vb-card-sub { color: var(--text-muted); font-size: 0.85em; margin: 2px 0 4px; }
+
+/* Hinweise zur CouchDB-URL im Generator */
+.vb-url-hints { margin: -6px 0 10px; }
+.vb-url-hint { font-size: 0.85em; line-height: 1.4; margin-top: 3px; }
+.vb-url-hint.vb-lvl-ok { color: var(--text-muted); }
+.vb-url-hint.vb-lvl-warn { color: var(--text-warning); }
+.vb-url-hint.vb-lvl-error { color: var(--text-error); }
