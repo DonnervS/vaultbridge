@@ -209,38 +209,40 @@ export class VaultStore {
     await this.writeChunks(chunks);
     if (winning) note._rev = winning._rev;
     await this.db.put(note);
-    let pruneError: unknown = null;
-    for (const rev of pruneRevs) {
-      try {
-        await this.db.remove(id, rev);
-      } catch (e) {
-        const status = (e as { status?: number }).status;
-        const name = (e as { name?: string }).name;
-        if (status === 404 || name === "not_found") continue; // bereits entfernt -> ok
-        pruneError = pruneError ?? e;
-      }
-    }
-    if (pruneError) throw toError(pruneError);
+    await this.removeTolerant(id, pruneRevs);
   }
 
   /**
    * Verwirft Konfliktzweige, OHNE eine neue Revision zu schreiben. Für den Fall,
    * dass die Zweige inhaltsgleich sind — dann ist Neuschreiben nicht nur
    * überflüssig, sondern schädlich: zwei Geräte, die gleichzeitig auflösen,
-   * erzeugen damit sofort den nächsten Konflikt. Ein 404 gilt als Erfolg
-   * (bereits von einem anderen Gerät entfernt).
-   *
-   * Ein 409 gilt hier ebenfalls als Erfolg: `db.remove(id, rev)` schlägt mit
-   * "conflict" fehl, wenn `rev` nicht mehr die Spitze seines Zweigs ist — und
-   * genau das ist der Fall, wenn dieser Zweig bereits (von diesem oder einem
-   * anderen Gerät) entfernt wurde. Da hier ausschließlich bekannte
-   * Konfliktzweig-Revisionen übergeben werden, kann ein 409 an dieser Stelle
-   * nur "schon erledigt" bedeuten, nie einen echten Schreibkonflikt mit neuem
-   * Inhalt — sonst wäre `pruneConflictRevs` bei zweimaligem Aufruf mit
-   * denselben Revisionen nicht idempotent (empirisch verifiziert gegen
-   * pouchdb-adapter-memory).
+   * erzeugen damit sofort den nächsten Konflikt.
    */
   async pruneConflictRevs(id: string, revs: string[]): Promise<void> {
+    await this.removeTolerant(id, revs);
+  }
+
+  /**
+   * Entfernt eine Liste bekannter Konfliktzweig-Revisionen und toleriert dabei
+   * "ist schon weg". Gemeinsam genutzt von `resolveConflict` (Prune nach dem
+   * Merge-Schreiben) und `pruneConflictRevs` (Prune ohne jedes Schreiben) —
+   * beide räumen ausschließlich Revisionen auf, die der Aufrufer bereits aus
+   * `_conflicts` gelesen hat, nie beliebige Dokument-Updates.
+   *
+   * Zwei Fehlerarten gelten deshalb als Erfolg:
+   * - 404/"not_found": die Revision existiert nicht mehr (kompaktiert oder
+   *   von einem anderen Gerät bereits entfernt).
+   * - 409/"conflict": `rev` ist nicht mehr die Spitze seines Zweigs, weil der
+   *   Zweig bereits entfernt (oder erneut fortgeschrieben) wurde. Praktisch
+   *   bedeutet das hier fast immer "schon erledigt". Im seltenen Fall, dass
+   *   der Zweig zwischenzeitlich mit neuem Inhalt fortgeschrieben wurde,
+   *   bleibt er weiterhin in `_conflicts` sichtbar und wird beim nächsten
+   *   Durchlauf erneut behandelt — es geht nichts verloren.
+   *
+   * Alle übrigen Fehler: der erste wird gemerkt und nach der Schleife
+   * geworfen (Rest der Liste wird trotzdem versucht — best effort).
+   */
+  private async removeTolerant(id: string, revs: string[]): Promise<void> {
     let firstError: unknown = null;
     for (const rev of revs) {
       try {
