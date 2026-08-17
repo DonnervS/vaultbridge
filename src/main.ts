@@ -706,6 +706,12 @@ export default class VaultbridgePlugin extends Plugin {
     // Wie in connect(): nach jedem await darf eine überholte Runde den Riegel
     // der inzwischen gültigen Verbindung nicht setzen.
     const generation = this.connectGeneration;
+    // Zusätzlich zur Verbindungs-Generation: ein reconcileFromStore()-Durchlauf,
+    // der wegen bridge.stop() vorzeitig ausstieg, meldet trotzdem Erfolg. Ein
+    // stop() OHNE Generationswechsel gibt es aber (Rotationspause,
+    // restartSync()) — dann läge womöglich nichts materialisiert vor und der
+    // Riegel dürfte nicht fallen.
+    const lifecycle = bridge.lifecycle();
     this.catchingUpPull = true;
     try {
       await localDb.replicate.from(remote);
@@ -719,6 +725,7 @@ export default class VaultbridgePlugin extends Plugin {
       // dafür auf einen Durchlauf, der nach diesem Pull begonnen hat.
       await bridge.reconcileFromStore();
       if (generation !== this.connectGeneration) return;
+      if (bridge.isStopped() || bridge.lifecycle() !== lifecycle) return;
       await this.markInitialPullDone();
     } catch {
       /* offline oder Serverfehler: beim nächsten Settle erneut versuchen */

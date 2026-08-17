@@ -41,6 +41,11 @@ export class VaultBridge {
   // aber noch in seinem await auf readBinary hängt und danach in eine gerade
   // geschlossene PouchDB schreiben würde ("connection is closing").
   private stopped = false;
+  // Zählt die stop()-Aufrufe. Ein Aufrufer, der über ein await hinweg wissen
+  // muss, ob die Bridge durchgehend gelaufen ist, merkt sich den Wert vorher
+  // und vergleicht danach — das erkennt auch ein stop()/start()-Paar
+  // (restartSync()), nach dem `stopped` sofort wieder false ist.
+  private stops = 0;
   // Der Erst-Upload (reconcileExisting/reconcileHidden) ist gesperrt, bis der
   // Erst-Pull durch ist — sonst vergleicht er gegen einen leeren Store, lädt
   // alles hoch und der nachfolgende Pull macht daraus auf JEDER Datei einen
@@ -212,17 +217,26 @@ export class VaultBridge {
    * catchUpInitialPull() verlässt, bevor es den Erst-Upload freigibt.
    */
   async reconcileFromStore(): Promise<void> {
-    if (!this.reconcileFromStoreRunning) {
+    // BEIDE Riegel prüfen, nicht nur den laufenden Durchlauf. Sonst gibt es ein
+    // Fenster, in dem der Vorlauf schon fertig ist (running === null) und der
+    // Nachlauf noch nicht angelaufen (pending !== null): ein Aufrufer in diesem
+    // Fenster startete einen eigenen Durchlauf, den der Nachlauf anschließend
+    // als „genügt mir auch" übernähme — und ein SPÄTERER Aufrufer bekäme damit
+    // ein Promise, dessen Durchlauf vor seinem Aufruf begonnen hat. Genau darauf
+    // verlässt sich catchUpInitialPull(), bevor es den Erst-Upload freigibt.
+    if (!this.reconcileFromStoreRunning && !this.reconcileFromStorePending) {
       await this.startReconcileFromStore();
       return;
     }
     if (!this.reconcileFromStorePending) {
       const previous = this.reconcileFromStoreRunning;
       this.reconcileFromStorePending = (async () => {
-        await previous.catch(() => undefined); // Fehler gehören dem Vorlauf
+        await previous?.catch(() => undefined); // Fehler gehören dem Vorlauf
         this.reconcileFromStorePending = null;
         // Hat inzwischen jemand anders einen Durchlauf gestartet? Der ist
         // ebenfalls nach dieser Anforderung losgelaufen und genügt ihr.
+        // (Mit dem Riegel oben kann das nicht mehr vorkommen — die Prüfung
+        // bleibt als Absicherung stehen, falls der Riegel je fällt.)
         const current = this.reconcileFromStoreRunning;
         if (current) { await current.catch(() => undefined); return; }
         await this.startReconcileFromStore();
@@ -491,8 +505,23 @@ export class VaultBridge {
     }
   }
 
+  /** Ist diese Bridge gerade gestoppt? */
+  isStopped(): boolean {
+    return this.stopped;
+  }
+
+  /**
+   * Marke des aktuellen Lebenszyklus; steigt bei jedem stop(). Wer sich auf
+   * einen abgeschlossenen reconcileFromStore()-Durchlauf verlässt, braucht sie:
+   * ein Durchlauf, der wegen stop() vorzeitig ausstieg, meldet trotzdem Erfolg.
+   */
+  lifecycle(): number {
+    return this.stops;
+  }
+
   stop(): void {
     this.stopped = true; // zuerst: laufende Schreibvorgänge sollen sofort abbrechen
+    this.stops++;
     for (const off of this.handlers) off();
     this.handlers.length = 0;
     this.incoming?.cancel();
