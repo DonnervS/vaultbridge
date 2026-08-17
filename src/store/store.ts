@@ -252,6 +252,38 @@ export class VaultStore {
   }
 
   /**
+   * Löst einen Konflikt zugunsten eines GELÖSCHTEN Zweiges auf: schreibt eine
+   * neue Revision, die weiterhin gelöscht ist (deleted, keine Chunks), und
+   * verwirft die unterlegenen Zweige.
+   *
+   * Ohne diesen Weg käme eine gewinnende Löschung als leere Datei zurück:
+   * resolveConflict() baut sein Dokument über encodeFile(), und das setzt
+   * `deleted` nie. Ob der Fall überhaupt eintritt, hängt allein davon ab,
+   * welchen Zweig CouchDB zum Gewinner gewählt hat — ist es der gelöschte,
+   * genügt pruneConflictRevs(), sonst muss hier geschrieben werden. Dieselbe
+   * Nutzeraktion darf nicht je nach dieser Wahl anders ausgehen.
+   *
+   * `meta` sind die Metadaten des gewinnenden (gelöschten) Zweiges und werden
+   * unverändert übernommen: die neue Revision soll genau diesen Zweig
+   * darstellen, samt löschendem Gerät und Löschzeitpunkt.
+   */
+  async resolveConflictAsDeleted(
+    id: string,
+    path: string,
+    meta: FileMeta,
+    pruneRevs: string[],
+  ): Promise<void> {
+    const winning = await this.getRaw<NoteDoc>(id);
+    // encodeFile mit leeren Bytes erzeugt keine Chunks — genau das, was eine
+    // Löschung braucht. `deleted` kennt encodeFile nicht; das wird hier gesetzt.
+    const { note } = await encodeFile(this.keys, path, new Uint8Array(0), meta, this.chunkSize);
+    note.deleted = true;
+    if (winning) note._rev = winning._rev;
+    await this.db.put(note);
+    await this.removeTolerant(id, pruneRevs);
+  }
+
+  /**
    * Verwirft Konfliktzweige, OHNE eine neue Revision zu schreiben. Für den Fall,
    * dass die Zweige inhaltsgleich sind — dann ist Neuschreiben nicht nur
    * überflüssig, sondern schädlich: zwei Geräte, die gleichzeitig auflösen,

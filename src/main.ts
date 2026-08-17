@@ -10,7 +10,7 @@ import { VaultStore } from "./store/store";
 import type { ConflictVersion } from "./store/store";
 import { startSync, SyncHandle, SyncStatus } from "./store/replication";
 import { EchoGuard, contentHash } from "./vault/applyChange";
-import { planAutoResolve, ConflictBranch } from "./conflicts/autoResolve";
+import { planAutoResolve, planResolutionStep, ConflictBranch } from "./conflicts/autoResolve";
 import { VaultBridge } from "./vault/bridge";
 import { DEFAULT_RULES, SyncRules, migrateRules, syncRuleState, setInclusion } from "./vault/rules";
 import { promptPassphrase } from "./ui/PassphrasePromptModal";
@@ -733,6 +733,15 @@ export default class VaultbridgePlugin extends Plugin {
    * gewinnt die neuere Fassung und die unterlegene wird als Sidecar gesichert
    * und gemeldet. Läuft bei jedem Sync-Settle.
    *
+   * Löschungen sind gewöhnliche Zweige (VaultStore.deleteFile markiert nur),
+   * eine Löschung gegen eine Bearbeitung also ein Allerweltsfall. Er wird in
+   * beide Richtungen sauber entschieden:
+   * - Die Löschung ist neuer -> die Datei bleibt überall gelöscht, der
+   *   unterlegene INHALT wird als Sidecar gesichert (er steht auf dem Spiel).
+   * - Die Bearbeitung ist neuer -> die Datei bleibt mit ihrem Inhalt erhalten;
+   *   kein Sidecar, weil eine Löschung nichts zu sichern hat, und die Meldung
+   *   sagt genau das: die Löschung wurde überholt.
+   *
    * Gated auf den Erstabgleich: solange der nicht durch ist, kennt dieses Gerät
    * den Datenbestand nur teilweise und dürfte gar nichts entscheiden.
    */
@@ -772,20 +781,35 @@ export default class VaultbridgePlugin extends Plugin {
           if (!keep) continue;
           const keepLabel = this.deviceLabel(keep.meta.device);
 
+          // Gerät der Fassung, die als Sidecar gesichert wird. Bewusst
+          // `contentLoser` und nicht `loser`: bei mehr als zwei Zweigen kann der
+          // neueste Verlierer eine Löschung sein, gesichert wird dann aber der
+          // neueste Verlierer MIT Inhalt — und dessen Gerät gehört in die Meldung.
+          const contentLoserLabel =
+            plan.kind === "newest-wins" && plan.contentLoser
+              ? this.deviceLabel(branches.get(plan.contentLoser.rev)?.meta.device)
+              : "";
+
           // Bei "newest-wins" MUSS die unterlegene Fassung sicher auf der Platte
           // liegen, BEVOR der Store sie verwirft — sonst ist sie bei einem
           // Schreibfehler unwiederbringlich weg (der Store hat den Zweig da schon
           // gelöscht). Deshalb: erst sichern, erst bei Erfolg auflösen. Schlägt die
           // Sicherung fehl, bleibt der Konflikt offen (sichere Richtung) und wird
           // beim nächsten Settle erneut versucht.
-          let loser: ConflictVersion | undefined;
-          if (plan.kind === "newest-wins") {
-            loser = branches.get(plan.loser.rev);
-            const loserLabel = this.deviceLabel(loser?.meta.device);
-            const saved = loser ? await this.saveConflictSidecar(c.path, loser.bytes) : false;
+          //
+          // Gesichert wird ausschließlich `contentLoser` — der neueste
+          // unterlegene Zweig MIT Inhalt. Verliert nur eine Löschung, ist
+          // `contentLoser` null: eine Löschung trägt keinen Inhalt, es steht
+          // nichts auf dem Spiel, und eine leere Sicherungsdatei wäre bloßes
+          // Rauschen.
+          if (plan.kind === "newest-wins" && plan.contentLoser) {
+            const contentLoser = branches.get(plan.contentLoser.rev);
+            const saved = contentLoser
+              ? await this.saveConflictSidecar(c.path, contentLoser.bytes)
+              : false;
             if (!saved) {
               new Notice(
-                `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert (${keepLabel} vs. ${loserLabel}); ` +
+                `Vaultbridge: Konflikt bei „${c.path}" (${keepLabel} vs. ${contentLoserLabel}); ` +
                   `die unterlegene Fassung konnte nicht gesichert werden. Der Konflikt bleibt offen und wird ` +
                   `beim nächsten Abgleich erneut versucht.`,
                 15000,
@@ -794,20 +818,48 @@ export default class VaultbridgePlugin extends Plugin {
             }
           }
 
-          if (plan.keep === c.local.rev) {
-            // Der gültige Zweig bleibt gültig — Verwerfen genügt, kein Schreiben.
-            await store.pruneConflictRevs(c.id, plan.prune);
-          } else {
-            await store.resolveConflict(c.id, c.path, keep.bytes, keep.meta, plan.prune);
+          // Welcher Store-Schritt nötig ist, entscheidet die reine Funktion —
+          // die ist testbar, dieser Ausführungsteil wegen des obsidian-Imports
+          // nicht.
+          switch (planResolutionStep(plan.keep, c.local.rev, keep.deleted)) {
+            case "prune":
+              await store.pruneConflictRevs(c.id, plan.prune);
+              break;
+            case "write-deleted":
+              await store.resolveConflictAsDeleted(c.id, c.path, keep.meta, plan.prune);
+              break;
+            default:
+              await store.resolveConflict(c.id, c.path, keep.bytes, keep.meta, plan.prune);
+              break;
           }
 
           if (plan.kind === "newest-wins") {
-            const loserLabel = this.deviceLabel(loser?.meta.device);
-            new Notice(
-              `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
-                `von ${keepLabel}; die Fassung von ${loserLabel} liegt als „${c.path}.vaultbridge-konflikt" im Vault.`,
-              15000,
-            );
+            if (keep.deleted) {
+              // Die Löschung gewinnt: die Datei verschwindet überall, der
+              // unterlegene Inhalt liegt als Sidecar daneben.
+              new Notice(
+                `Vaultbridge: „${c.path}" wurde auf ${keepLabel} gelöscht und auf ${contentLoserLabel} geändert. ` +
+                  `Übernommen wurde die neuere Löschung; die Fassung von ${contentLoserLabel} liegt als ` +
+                  `„${c.path}.vaultbridge-konflikt" im Vault.`,
+                15000,
+              );
+            } else if (!plan.contentLoser) {
+              // Nur eine Löschung ist unterlegen: nichts stand auf dem Spiel,
+              // also auch kein Sidecar — nur die Erklärung, warum die
+              // gelöschte Datei wieder da ist.
+              const loeschendesGeraet = this.deviceLabel(branches.get(plan.loser.rev)?.meta.device);
+              new Notice(
+                `Vaultbridge: „${c.path}" wurde auf ${loeschendesGeraet} gelöscht und auf ${keepLabel} geändert. ` +
+                  `Die neuere Änderung von ${keepLabel} hat die Löschung überholt — die Datei bleibt erhalten.`,
+                15000,
+              );
+            } else {
+              new Notice(
+                `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
+                  `von ${keepLabel}; die Fassung von ${contentLoserLabel} liegt als „${c.path}.vaultbridge-konflikt" im Vault.`,
+                15000,
+              );
+            }
           }
         } catch (e) {
           // Eine Datei darf den Durchlauf nicht abbrechen.
