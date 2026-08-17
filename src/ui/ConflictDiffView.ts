@@ -1,6 +1,7 @@
 import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
 import { VaultStore } from "../store/store";
 import { ConflictSession } from "../conflicts/session";
+import type { FileMeta } from "../store/model";
 
 export const VIEW_TYPE_CONFLICT_DIFF = "vaultbridge-conflict-diff";
 
@@ -27,16 +28,16 @@ export class ConflictDiffView extends ItemView {
 
   async onOpen(): Promise<void> { await this.render(); }
 
-  /** „Mac-7f3 · 6. Aug. 2026, 14:23" — mit Rückfallwerten für alte Dokumente. */
-  private sideLabel(meta: import("../store/model").FileMeta): string {
-    const device = meta.device && meta.device.length > 0 ? meta.device : "Gerät unbekannt";
+  /** „Mac-7f3 · 6. Aug. 2026, 14:23“ — mit Rückfallwerten für alte Dokumente. */
+  private sideLabel(meta: FileMeta): string {
+    const device = meta.device ? meta.device : "Gerät unbekannt";
     const stamp = meta.changedAt ?? (meta.mtime > 0 ? meta.mtime : undefined);
     if (stamp === undefined) return device;
-    return `${device} · ${new Date(stamp).toLocaleString()}`;
+    return `${device} · ${new Date(stamp).toLocaleString("de-DE")}`;
   }
 
-  private deviceOf(meta: import("../store/model").FileMeta): string {
-    return meta.device && meta.device.length > 0 ? meta.device : "einem unbekannten Gerät";
+  private deviceOf(meta: FileMeta): string {
+    return meta.device ? meta.device : "einem unbekannten Gerät";
   }
 
   async render(): Promise<void> {
@@ -169,7 +170,7 @@ export class ConflictDiffView extends ItemView {
   /** Komplett eine Seite (A oder B) übernehmen und sofort speichern. */
   private async saveWhole(
     store: VaultStore,
-    conflict: { id: string; path: string; local: { meta: import("../store/model").FileMeta } },
+    conflict: { id: string; path: string; local: { meta: FileMeta } },
     session: ConflictSession,
     side: "local" | "remote",
   ): Promise<void> {
@@ -179,7 +180,7 @@ export class ConflictDiffView extends ItemView {
 
   private async saveBytes(
     store: VaultStore,
-    conflict: { id: string; path: string; local: { meta: import("../store/model").FileMeta } },
+    conflict: { id: string; path: string; local: { meta: FileMeta } },
     session: ConflictSession,
     bytes: Uint8Array,
   ): Promise<void> {
@@ -259,8 +260,8 @@ export class ConflictDiffView extends ItemView {
   private renderBinary(
     root: HTMLElement,
     conflict: {
-      local: { bytes: Uint8Array; meta: import("../store/model").FileMeta };
-      remotes: { bytes: Uint8Array; meta: import("../store/model").FileMeta }[];
+      local: { bytes: Uint8Array; meta: FileMeta };
+      remotes: { bytes: Uint8Array; meta: FileMeta }[];
     },
   ): void {
     const cards = root.createDiv({ cls: "vb-binary" });
