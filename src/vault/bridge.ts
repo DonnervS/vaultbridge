@@ -28,6 +28,11 @@ export class VaultBridge {
   private materialized = new Set<string>();
   private reconcileFromStoreRunning = false;
   private keyMismatchNotified = false;
+  // Gestoppt heißt: diese Bridge darf nicht mehr in den Store schreiben. Nötig,
+  // weil stop() die Listener sofort abmeldet, ein BEREITS LAUFENDER Schreibvorgang
+  // aber noch in seinem await auf readBinary hängt und danach in eine gerade
+  // geschlossene PouchDB schreiben würde ("connection is closing").
+  private stopped = false;
 
   constructor(
     private readonly app: App,
@@ -60,13 +65,17 @@ export class VaultBridge {
   }
 
   start(): void {
+    this.stopped = false;
     const vault = this.app.vault;
 
     const onLocalWrite = async (file: TFile) => {
       try {
+        if (this.stopped) return;
         if (!shouldSync(file.path, this.rules, this.configDir)) return;
         const bytes = new Uint8Array(await vault.readBinary(file));
+        if (this.stopped) return; // während des Lesens getrennt -> nicht mehr schreiben
         if (this.guard.isEcho(file.path, await contentHash(bytes))) return; // eigene Remote-Schreibung
+        if (this.stopped) return;
         await this.store.putFile(file.path, bytes, this.metaOf(file));
       } catch (e) {
         new Notice(`Vaultbridge: Sync-Fehler bei ${file.path}: ${String(e)}`);
@@ -74,6 +83,7 @@ export class VaultBridge {
     };
     const onLocalDelete = async (file: TAbstractFile) => {
       try {
+        if (this.stopped) return;
         if (!shouldSync(file.path, this.rules, this.configDir)) return;
         if (this.guard.isEcho(file.path, DELETE_SENTINEL)) return; // eigene Remote-Löschung
         await this.store.deleteFile(file.path);
@@ -111,6 +121,7 @@ export class VaultBridge {
 
   private async reconcileExisting(): Promise<void> {
     for (const file of this.app.vault.getFiles()) {
+      if (this.stopped) return; // getrennt -> laufenden Abgleich abbrechen
       try {
         if (!shouldSync(file.path, this.rules, this.configDir)) continue;
         const bytes = new Uint8Array(await this.app.vault.readBinary(file));
@@ -152,6 +163,7 @@ export class VaultBridge {
 
       let materializedThisRound = 0;
       for (const id of pending) {
+        if (this.stopped) return; // getrennt -> laufenden Abgleich abbrechen
         // Probe-Entschlüsselung: Ist die Notiz (noch) nicht dekodierbar — etwa
         // weil ihre Chunks beim laufenden Pull noch nicht angekommen sind (die
         // Replikation garantiert keine Reihenfolge zwischen n:-Doc und h:-Chunks)
@@ -189,6 +201,7 @@ export class VaultBridge {
   }
 
   private async applyRemote(id: string): Promise<void> {
+    if (this.stopped) return;
     try {
       const note = await this.store.readNote(id);
       if (!note) return;
@@ -303,6 +316,7 @@ export class VaultBridge {
    * rohen Dateisystem-Adapter statt der Vault-API.
    */
   async reconcileHidden(): Promise<void> {
+    if (this.stopped) return;
     if (this.reconcileRunning) return;
     this.reconcileRunning = true;
     try {
@@ -334,6 +348,7 @@ export class VaultBridge {
         }
         const plan = planHiddenSync(local, known, store);
         for (const path of plan.uploads) {
+          if (this.stopped) return; // getrennt -> nicht weiter hochladen
           let bytes: Uint8Array;
           try {
             bytes = new Uint8Array(await adapter.readBinary(path));
@@ -385,6 +400,7 @@ export class VaultBridge {
   }
 
   stop(): void {
+    this.stopped = true; // zuerst: laufende Schreibvorgänge sollen sofort abbrechen
     for (const off of this.handlers) off();
     this.handlers.length = 0;
     this.incoming?.cancel();
