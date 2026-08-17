@@ -327,6 +327,10 @@ export default class VaultbridgePlugin extends Plugin {
     this.stopSyncStack();
     this.bridge = null;
     this.currentPullKey = null;
+    // Ein noch laufender Nach-Pull gehört zur alten Verbindung; er erkennt das
+    // an der Generation und schreibt nichts mehr. Die Sperre darf die neue
+    // Verbindung aber nicht blockieren, bis er abgelaufen ist.
+    this.catchingUpPull = false;
     void this.localDb?.close();
     this.localDb = null;
     this.remote = null;
@@ -657,13 +661,23 @@ export default class VaultbridgePlugin extends Plugin {
     if (this.catchingUpPull) return;
     const localDb = this.localDb;
     const remote = this.remote;
-    if (!localDb || !remote) return;
-    // Wie in connect(): nach dem await darf eine überholte Runde den Riegel
+    const bridge = this.bridge;
+    if (!localDb || !remote || !bridge) return;
+    // Wie in connect(): nach jedem await darf eine überholte Runde den Riegel
     // der inzwischen gültigen Verbindung nicht setzen.
     const generation = this.connectGeneration;
     this.catchingUpPull = true;
     try {
       await localDb.replicate.from(remote);
+      if (generation !== this.connectGeneration) return;
+      // Erst in den Vault materialisieren, dann den Riegel lösen — dieselbe
+      // Reihenfolge wie in connect(). Sonst liegen die frisch gezogenen Notizen
+      // zwar im Store, aber noch nicht als Dateien vor, und reconcileExisting()
+      // schiebt die veraltete lokale Fassung darüber. Der Live-Feed erledigt
+      // das NICHT verlässlich: er läuft ungewartet nebenher und überspringt
+      // Notizen, deren Chunks noch nicht da sind. reconcileFromStore() wartet
+      // dafür auf einen Durchlauf, der nach diesem Pull begonnen hat.
+      await bridge.reconcileFromStore();
       if (generation !== this.connectGeneration) return;
       await this.markInitialPullDone();
     } catch {
