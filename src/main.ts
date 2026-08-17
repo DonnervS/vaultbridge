@@ -235,6 +235,7 @@ export default class VaultbridgePlugin extends Plugin {
           if (this.knownSaveTimer !== null) window.clearTimeout(this.knownSaveTimer);
           this.knownSaveTimer = window.setTimeout(() => { this.knownSaveTimer = null; void this.saveSettings(); }, 2000);
         },
+        () => this.settings.deviceName,
         (p) => this.onHiddenApplied(p),
       );
       ownBridge = this.bridge;

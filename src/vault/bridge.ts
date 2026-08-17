@@ -5,6 +5,7 @@ import { FileMeta } from "../store/model";
 import { SyncRules, shouldSync, isHidden, folderIsExcluded } from "./rules";
 import { listAllFiles } from "./adapterScan";
 import { planHiddenSync } from "./hiddenSync";
+import { uploadIfChanged } from "../store/initialSync";
 
 // Sentinel-"Hash" für Löschungen: der Echo-Guard arbeitet sonst mit Inhalts-
 // Hashes; eine Löschung hat keinen Inhalt, daher ein fester, kollisionsfreier Wert.
@@ -33,6 +34,15 @@ export class VaultBridge {
   // aber noch in seinem await auf readBinary hängt und danach in eine gerade
   // geschlossene PouchDB schreiben würde ("connection is closing").
   private stopped = false;
+  // Der Erst-Upload (reconcileExisting/reconcileHidden) ist gesperrt, bis der
+  // Erst-Pull durch ist — sonst vergleicht er gegen einen leeren Store, lädt
+  // alles hoch und der nachfolgende Pull macht daraus auf JEDER Datei einen
+  // Konflikt. Freigegeben von runInitialUpload().
+  private initialUploadDone = false;
+  // Löschungen während des Erst-Pulls: reconcileExisting() sieht nur, was da
+  // IST, kann also nichts über inzwischen gelöschte Dateien aussagen. Deshalb
+  // gepuffert und nach der Freigabe nachgeholt.
+  private queuedDeletes = new Set<string>();
 
   constructor(
     private readonly app: App,
@@ -45,6 +55,7 @@ export class VaultBridge {
     private readonly configDir: string,
     private readonly getKnown: () => Map<string, string>,
     private readonly setKnown: (m: Map<string, string>) => void,
+    private readonly getDeviceName: () => string,
     private readonly onApplied?: (path: string) => void,
   ) {}
 
@@ -72,6 +83,10 @@ export class VaultBridge {
       try {
         if (this.stopped) return;
         if (!shouldSync(file.path, this.rules, this.configDir)) return;
+        // Während des Erst-Pulls nicht hochladen. reconcileExisting() holt
+        // jede vorhandene Datei danach ohnehin nach, inklusive der hier
+        // übergangenen Änderung.
+        if (!this.initialUploadDone) return;
         const bytes = new Uint8Array(await vault.readBinary(file));
         if (this.stopped) return; // während des Lesens getrennt -> nicht mehr schreiben
         if (this.guard.isEcho(file.path, await contentHash(bytes))) return; // eigene Remote-Schreibung
@@ -85,6 +100,7 @@ export class VaultBridge {
       try {
         if (this.stopped) return;
         if (!shouldSync(file.path, this.rules, this.configDir)) return;
+        if (!this.initialUploadDone) { this.queuedDeletes.add(file.path); return; }
         if (this.guard.isEcho(file.path, DELETE_SENTINEL)) return; // eigene Remote-Löschung
         await this.store.deleteFile(file.path);
       } catch (e) {
@@ -104,9 +120,34 @@ export class VaultBridge {
     // Eingehende Remote-Änderungen anwenden.
     this.incoming = this.store.subscribe((id) => void this.applyRemote(id));
 
-    // Bestehende Dateien initial hochladen (Obsidian feuert für vorhandene
-    // Dateien kein create-Event).
-    void this.reconcileExisting();
+    // Kein Erst-Upload hier: der läuft erst nach dem Erst-Pull über
+    // runInitialUpload(). Die Vault-Listener oben sind trotzdem sofort aktiv,
+    // damit während des Pulls nichts unbemerkt bleibt.
+  }
+
+  /**
+   * Gibt den Erst-Upload frei und führt ihn aus. Wird von main.ts erst
+   * aufgerufen, wenn der Erst-Pull gegen diese Datenbank abgeschlossen ist —
+   * ab dann hat reconcileExisting() einen gefüllten Store zum Vergleichen und
+   * lädt nur noch echte Abweichungen hoch. Idempotent.
+   */
+  async runInitialUpload(): Promise<void> {
+    if (this.initialUploadDone) return;
+    this.initialUploadDone = true;
+    await this.reconcileExisting();
+    for (const path of this.queuedDeletes) {
+      // Nur löschen, was auch wirklich weg ist — eine Datei kann während des
+      // Pulls gelöscht und wieder angelegt worden sein.
+      if (!this.app.vault.getAbstractFileByPath(path)) {
+        try {
+          await this.store.deleteFile(path);
+        } catch (e) {
+          new Notice(`Vaultbridge: Löschung konnte nicht nachgeholt werden (${path}): ${String(e)}`);
+        }
+      }
+    }
+    this.queuedDeletes.clear();
+    await this.reconcileHidden();
   }
 
   private metaOf(file: TFile): FileMeta {
@@ -116,20 +157,19 @@ export class VaultBridge {
       size: file.stat.size,
       mime: "",
       isBinary: !/^(md|txt|json|css|ya?ml)$/i.test(file.extension),
+      device: this.getDeviceName(),
+      changedAt: Date.now(),
     };
   }
 
   private async reconcileExisting(): Promise<void> {
+    if (!this.initialUploadDone) return; // Erst-Pull noch nicht abgeschlossen
     for (const file of this.app.vault.getFiles()) {
       if (this.stopped) return; // getrennt -> laufenden Abgleich abbrechen
       try {
         if (!shouldSync(file.path, this.rules, this.configDir)) continue;
         const bytes = new Uint8Array(await this.app.vault.readBinary(file));
-        const existing = await this.store.getFile(file.path);
-        if (existing && (await contentHash(existing.bytes)) === (await contentHash(bytes))) {
-          continue; // unverändert -> kein erneuter Upload (idempotent, kein Churn)
-        }
-        await this.store.putFile(file.path, bytes, this.metaOf(file));
+        await uploadIfChanged(this.store, file.path, bytes, this.metaOf(file));
       } catch (e) {
         new Notice(`Vaultbridge: Erst-Abgleich fehlgeschlagen bei ${file.path}: ${String(e)}`);
       }
@@ -317,6 +357,7 @@ export class VaultBridge {
    */
   async reconcileHidden(): Promise<void> {
     if (this.stopped) return;
+    if (!this.initialUploadDone) return; // Erst-Pull noch nicht abgeschlossen
     if (this.reconcileRunning) return;
     this.reconcileRunning = true;
     try {
@@ -369,6 +410,8 @@ export class VaultBridge {
           await this.store.putFile(path, bytes, {
             mtime: 0, ctime: 0, size: bytes.length, mime: "",
             isBinary: !/\.(md|txt|json|css|ya?ml|js)$/i.test(path),
+            device: this.getDeviceName(),
+            changedAt: Date.now(),
           });
         }
         for (const path of plan.deleteRemotes) {
