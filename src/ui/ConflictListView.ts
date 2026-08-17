@@ -44,9 +44,11 @@ export class ConflictListView extends ItemView {
       return;
     }
 
-    // Sammel-Auflösung für die häufigen „unechten“ Konflikte (identischer Inhalt,
-    // nur divergierende Revisionen) — spart das Einzeln-Durchklicken.
-    const resolveBtn = root.createEl("button", { cls: "vb-cv-resolve-all", text: "Identische auflösen" });
+    // Sammel-Auflösung, ohne auf den nächsten Sync-Settle zu warten: identische
+    // Zweige werden still verworfen, bei echten Abweichungen gewinnt die neuere
+    // Fassung (die unterlegene landet als Sidecar im Vault) — spart das
+    // Einzeln-Durchklicken.
+    const resolveBtn = root.createEl("button", { cls: "vb-cv-resolve-all", text: "Konflikte jetzt auflösen" });
     resolveBtn.onclick = () => this.onResolveIdentical();
 
     const activeId = this.getActiveId();

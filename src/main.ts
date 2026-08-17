@@ -164,8 +164,10 @@ export default class VaultbridgePlugin extends Plugin {
       callback: () => void this.openConflictView(),
     });
     this.addCommand({
+      // id bewusst unverändert: Obsidian löst Hotkeys über die id auf, eine
+      // Änderung würde bereits vom Nutzer gesetzte Tastenkürzel stillschweigend brechen.
       id: "resolve-identical-conflicts",
-      name: "Identische Konflikte auflösen",
+      name: "Konflikte jetzt auflösen",
       callback: () => void this.resolveIdenticalConflicts(),
     });
     this.addCommand({
@@ -751,23 +753,33 @@ export default class VaultbridgePlugin extends Plugin {
           const plan = planAutoResolve(winner, others);
           if (!plan) continue;
 
+          // Einmal nachschlagen, statt (wie zuvor) für Schreiben und Notice
+          // getrennt — plan.keep steht für beide Zweige immer in branches,
+          // siehe toBranch()/versions oben.
+          const keep = branches.get(plan.keep);
+          if (!keep) continue;
+
           if (plan.keep === c.local.rev) {
             // Der gültige Zweig bleibt gültig — Verwerfen genügt, kein Schreiben.
             await store.pruneConflictRevs(c.id, plan.prune);
           } else {
-            const keep = branches.get(plan.keep);
-            if (!keep) continue;
             await store.resolveConflict(c.id, c.path, keep.bytes, keep.meta, plan.prune);
           }
 
           if (plan.kind === "newest-wins") {
             const loser = branches.get(plan.loser.rev);
-            const keep = branches.get(plan.keep);
-            if (loser) await this.saveConflictSidecar(c.path, loser.bytes);
+            const saved = loser ? await this.saveConflictSidecar(c.path, loser.bytes) : false;
+            const keepLabel = this.deviceLabel(keep.meta.device);
+            const loserLabel = this.deviceLabel(loser?.meta.device);
             new Notice(
-              `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
-                `von ${this.deviceLabel(keep?.meta.device)}; die Fassung von ${this.deviceLabel(loser?.meta.device)} ` +
-                `liegt als „${c.path}.vaultbridge-konflikt" im Vault.`,
+              saved
+                ? `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
+                    `von ${keepLabel}; die Fassung von ${loserLabel} liegt als „${c.path}.vaultbridge-konflikt" im Vault.`
+                // Die Sicherung ist fehlgeschlagen — das darf NICHT als Erfolg gemeldet werden,
+                // sonst hält der Nutzer die unterlegene Fassung für sicher, während sie bereits
+                // aus dem Store verworfen und nirgends abgelegt ist.
+                : `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
+                    `von ${keepLabel}; die Fassung von ${loserLabel} konnte nicht gesichert werden.`,
               15000,
             );
           }
@@ -786,12 +798,17 @@ export default class VaultbridgePlugin extends Plugin {
     return device && device.length > 0 ? device : "einem unbekannten Gerät";
   }
 
-  /** Sichert eine unterlegene Fassung neben der Datei, damit nichts verloren geht. */
-  private async saveConflictSidecar(path: string, bytes: Uint8Array): Promise<void> {
+  /**
+   * Sichert eine unterlegene Fassung neben der Datei, damit nichts verloren geht.
+   * Meldet per Rückgabewert, ob es geklappt hat — der Aufrufer braucht das, um dem
+   * Nutzer nicht fälschlich eine erfolgreiche Sicherung zu melden, wenn sie fehlschlug.
+   */
+  private async saveConflictSidecar(path: string, bytes: Uint8Array): Promise<boolean> {
     try {
       await this.app.vault.adapter.writeBinary(`${path}.vaultbridge-konflikt`, bytes.slice().buffer);
-    } catch (e) {
-      new Notice(`Vaultbridge: Sicherung der unterlegenen Fassung fehlgeschlagen (${path}): ${String(e)}`);
+      return true;
+    } catch {
+      return false;
     }
   }
 
