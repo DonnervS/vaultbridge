@@ -27,6 +27,18 @@ export class ConflictDiffView extends ItemView {
 
   async onOpen(): Promise<void> { await this.render(); }
 
+  /** „Mac-7f3 · 6. Aug. 2026, 14:23" — mit Rückfallwerten für alte Dokumente. */
+  private sideLabel(meta: import("../store/model").FileMeta): string {
+    const device = meta.device && meta.device.length > 0 ? meta.device : "Gerät unbekannt";
+    const stamp = meta.changedAt ?? (meta.mtime > 0 ? meta.mtime : undefined);
+    if (stamp === undefined) return device;
+    return `${device} · ${new Date(stamp).toLocaleString()}`;
+  }
+
+  private deviceOf(meta: import("../store/model").FileMeta): string {
+    return meta.device && meta.device.length > 0 ? meta.device : "einem unbekannten Gerät";
+  }
+
   async render(): Promise<void> {
     const root = this.contentEl;
     root.empty();
@@ -48,6 +60,15 @@ export class ConflictDiffView extends ItemView {
 
     const header = root.createDiv({ cls: "vb-cv-detail-head" });
     header.createDiv({ cls: "vb-cv-path", text: conflict.path });
+
+    const devices = [conflict.local, ...conflict.remotes].map((v) => this.deviceOf(v.meta));
+    header.createDiv({
+      cls: "vb-cv-devices",
+      text:
+        conflict.remotes.length === 1
+          ? `Geändert auf ${devices[0]} (A) und ${devices[1]} (B)`
+          : `Geändert auf: ${devices.join(", ")}`,
+    });
 
     const session = new ConflictSession({
       id: conflict.id,
@@ -96,7 +117,10 @@ export class ConflictDiffView extends ItemView {
     const showCompare = (): void => {
       body.empty(); footer.empty();
       setNote("„Aktuell“ (A) ist die derzeit gültige Version, „Konflikt“ (B) die abweichende. Farbig markiert sind die Abschnitte, die sich unterscheiden.");
-      this.renderDiff(body, session);
+      this.renderDiff(body, session, {
+        local: this.sideLabel(conflict.local.meta),
+        remote: this.sideLabel(conflict.remotes[0].meta),
+      });
       footer.createEl("button", { cls: "vb-btn-a", text: "Nur „Aktuell“ (A)" })
         .onclick = () => void this.saveWhole(store, conflict, session, "local");
       footer.createEl("button", { cls: "vb-btn-b", text: "Nur „Konflikt“ (B)" })
@@ -179,12 +203,16 @@ export class ConflictDiffView extends ItemView {
    * unterschiedliche Abschnitte neutral markiert (bewusst kein rot/grün — die
    * Wahl trifft man über die Buttons A / B / A+B, nicht hier).
    */
-  private renderDiff(root: HTMLElement, session: ConflictSession): void {
+  private renderDiff(root: HTMLElement, session: ConflictSession, labels: { local: string; remote: string }): void {
     const table = root.createDiv({ cls: "vb-diff" });
 
     const colHead = table.createDiv({ cls: "vb-diff-head" });
-    colHead.createDiv({ cls: "vb-diff-head-cell vb-side-local", text: "Aktuell (A)" });
-    colHead.createDiv({ cls: "vb-diff-head-cell vb-side-remote", text: "Konflikt (B)" });
+    const cellL = colHead.createDiv({ cls: "vb-diff-head-cell vb-side-local" });
+    cellL.createDiv({ text: "Aktuell (A)" });
+    cellL.createDiv({ cls: "vb-diff-head-sub", text: labels.local });
+    const cellR = colHead.createDiv({ cls: "vb-diff-head-cell vb-side-remote" });
+    cellR.createDiv({ text: "Konflikt (B)" });
+    cellR.createDiv({ cls: "vb-diff-head-sub", text: labels.remote });
 
     let lnLocal = 0;
     let lnRemote = 0;
@@ -230,14 +258,19 @@ export class ConflictDiffView extends ItemView {
 
   private renderBinary(
     root: HTMLElement,
-    conflict: { local: { bytes: Uint8Array }; remotes: { bytes: Uint8Array }[] },
+    conflict: {
+      local: { bytes: Uint8Array; meta: import("../store/model").FileMeta };
+      remotes: { bytes: Uint8Array; meta: import("../store/model").FileMeta }[];
+    },
   ): void {
     const cards = root.createDiv({ cls: "vb-binary" });
     const local = cards.createDiv({ cls: "vb-card" });
-    local.createEl("b", { text: "Aktuell (gültig)" });
+    local.createEl("b", { text: "Aktuell (A)" });
+    local.createDiv({ cls: "vb-card-sub", text: this.sideLabel(conflict.local.meta) });
     local.createDiv({ text: `${conflict.local.bytes.length} Bytes` });
     const remote = cards.createDiv({ cls: "vb-card" });
-    remote.createEl("b", { text: "Konfliktversion" });
+    remote.createEl("b", { text: "Konflikt (B)" });
+    remote.createDiv({ cls: "vb-card-sub", text: this.sideLabel(conflict.remotes[0].meta) });
     remote.createDiv({ text: `${conflict.remotes[0].bytes.length} Bytes` });
   }
 

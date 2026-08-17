@@ -142,3 +142,9 @@
 .vb-diff-row .vb-col { flex: 1; white-space: pre-wrap; padding: 4px; font-family: var(--font-monospace); }
 .vb-change .vb-local { background: rgba(248, 81, 73, 0.15); }
 .vb-change .vb-remote { background: rgba(63, 185, 80, 0.15); }
+
+/* Gerätezuordnung in Konfliktliste und -vergleich */
+.vb-cv-devices { color: var(--text-muted); font-size: 0.85em; margin-top: 2px; }
+.vb-cv-item-devices { color: var(--text-faint); font-size: 0.75em; line-height: 1.3; margin-top: 2px; }
+.vb-diff-head-sub { color: var(--text-muted); font-weight: 400; font-size: 0.9em; }
+.vb-card-sub { color: var(--text-muted); font-size: 0.85em; margin: 2px 0 4px; }
