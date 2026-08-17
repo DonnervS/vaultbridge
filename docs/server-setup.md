@@ -145,10 +145,10 @@ code). Run the connection self-test — if CORS or credentials are wrong, it wil
   **cannot be fixed on the server**: Local Network Access replaced the older
   Private Network Access model, and the `Access-Control-Allow-Private-Network`
   response header is no longer evaluated. In Vaultbridge's settings, switch
-  **Connection method** to **Obsidian (requestUrl)** — that routes replication
-  through Obsidian's own HTTP layer, which is subject to neither CORS nor Local
-  Network Access. The built-in self-test checks both paths and tells you which one
-  works.
+  **"Verbindungsart"** (Connection method) to **"Obsidian (requestUrl)"** — that
+  routes replication through Obsidian's own HTTP layer, which is subject to
+  neither CORS nor Local Network Access. The built-in self-test checks both paths
+  and tells you which one works.
 - **401 Unauthorized** — wrong username/password.
 - **Database doesn't exist yet** — that's fine. Vaultbridge's self-test reports this as OK, and the database is created automatically on the first sync. You don't need to pre-create it (though the steps above do, which is also fine).
 - **Works on desktop but not mobile** — mobile requires a valid HTTPS certificate and

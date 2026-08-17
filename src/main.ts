@@ -897,6 +897,15 @@ export default class VaultbridgePlugin extends Plugin {
     }
   }
 
+  /**
+   * Löst zuerst auf, was sich gefahrlos automatisch auflösen lässt, und zählt
+   * ERST DANACH die verbliebenen Konflikte für Badge, Liste und Diff-Bereich.
+   * Läuft bei jedem Sync-Settle und bei jedem manuellen Auslöser — Badge und
+   * Vergleichsansicht zeigen deshalb nur, was die automatische Auflösung stehen
+   * lässt (etwa weil die Sicherung der unterlegenen Fassung fehlschlug oder der
+   * Erstabgleich noch nicht durch ist), plus alles, was man vor dem nächsten
+   * Settle erreicht.
+   */
   private async refreshConflicts(): Promise<void> {
     if (!this.store) {
       this.statusBar.setConflicts(0);
@@ -906,9 +915,13 @@ export default class VaultbridgePlugin extends Plugin {
       await this.autoResolveConflicts();
       const ids = await this.store.listConflicts();
       this.statusBar.setConflicts(ids.length);
-      // Nur die LISTE (rechts) aktualisieren — der Diff-Bereich (Mitte) bleibt
-      // bewusst stehen, damit ein Sync-Event die gerade offene Auflösung nicht
-      // unter den Fingern zurücksetzt.
+      // Nur die LISTE (rechts) neu zeichnen; der Diff-Bereich (Mitte) bleibt
+      // stehen, damit ein Sync-Event eine gerade begonnene manuelle Auflösung
+      // nicht unter den Fingern zurücksetzt. Ein Schutz vor Veränderung ist das
+      // NICHT: autoResolveConflicts() läuft direkt darüber und kann denselben
+      // Konflikt schon aufgelöst haben. Dann steht im Diff-Bereich eine tote ID
+      // — der Nachzug gleich darunter setzt ihn auf den nächsten offenen
+      // Konflikt (oder leert ihn).
       this.renderConflictList();
       // Ist der offene Konflikt zwischenzeitlich verschwunden (extern gelöst),
       // den Diff einmal nachziehen, damit er nicht auf einer toten ID steht.

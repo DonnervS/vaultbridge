@@ -12,7 +12,7 @@ Vaultbridge keeps an Obsidian vault in sync across desktop and mobile through a 
 
 - **End-to-end encryption.** Content, file paths, and metadata are encrypted with AES-256-GCM. Keys are derived from your passphrase with PBKDF2-HMAC-SHA256 (≥210,000 iterations) and HKDF. Each file is addressed by an opaque HMAC id and its real path is stored separately, AES-GCM-encrypted — so your devices can recover the filename but the server cannot. File bodies are split into content-addressed, encrypted chunks. The server sees only ciphertext, opaque ids, and rough structure (how many docs/chunks, roughly how big).
 - **One-string setup.** A single `vbridge1:…` setup string carries the server connection and encryption parameters. Generate it once, scan the QR code or paste the string on each device, done. The passphrase can be embedded in the string or kept separate and entered per device.
-- **Conflict diff view.** When two devices edit the same note, Vaultbridge shows a two-column diff and lets you adopt changes hunk-by-hunk or take a whole side — no silent "last write wins", no lost edits.
+- **Automatic conflict resolution — and a diff view for the rest.** When two devices touch the same note, Vaultbridge resolves the conflict on the next sync settle. Branches that turn out to be identical are discarded silently (nothing is rewritten). A genuine divergence is resolved in favour of the newer version, and the superseded one is written next to the file as `<name>.vaultbridge-konflikt` and reported in a notice — so the resolution is automatic, but never silent and never without a copy. A deletion competing with an edit follows the same rule: if the deletion is newer the file stays deleted on every device and the competing content is kept as the sidecar; if the edit is newer the file survives and the deletion is reported as overridden. Whatever automatic resolution leaves alone — and any conflict you open before the next settle — goes to a two-column diff view where you adopt changes hunk-by-hunk or take a whole side.
 - **File history.** Browse previous revisions of a note (as far back as your CouchDB retains them), diff any revision against the current version, and restore one as a new, non-destructive revision.
 - **Non-Obsidian file control.** By default Vaultbridge syncs *everything* — your notes and hidden/dotfiles that Obsidian ignores, including tool config like `.claude/` and `.hinote/` folders nested anywhere in the vault (e.g. inside a "Dev" folder you use with Claude Code or Codex). Because dotfiles raise no Obsidian events, Vaultbridge scans for them periodically. You control what stays out via a simple **exclusion** list — a single file, a whole folder (with its subfolders), or a name that matches everywhere. Device-local churn files (`.obsidian/workspace*.json`, `.trash`, `.DS_Store`) and `.git` internals are excluded by default (syncing a `.git` folder as plain files would corrupt the repo). Concurrent edits to a hidden file are preserved in a sidecar `*.vaultbridge-konflikt` file rather than being overwritten.
 - **Plugin sync & update.** Mirror community plugins across devices — plugin code, their enabled state (`community-plugins.json`), and their settings (`data.json`) — with settings conflicts routed through the same diff view. A reload button applies plugin updates without restarting Obsidian. (Vaultbridge's own settings always stay local, so each device keeps its own identity.)
@@ -29,8 +29,9 @@ Vaultbridge keeps an Obsidian vault in sync across desktop and mobile through a 
 CORS misconfiguration is the single most common onboarding problem. Vaultbridge's connection self-test checks for it explicitly and tells you what to fix.
 
 If your CouchDB lives on a local IP, recent Obsidian builds may block the connection
-(Chromium's Local Network Access). Switch **Connection method** to **Obsidian
-(requestUrl)** in the settings — see [`docs/server-setup.md`](docs/server-setup.md).
+(Chromium's Local Network Access). Switch **"Verbindungsart"** (Connection method)
+to **"Obsidian (requestUrl)"** in the settings — see
+[`docs/server-setup.md`](docs/server-setup.md).
 
 ---
 
@@ -65,7 +66,7 @@ For a quick manual setup string during local testing, `npm run make-setup` print
 
 ## Usage
 
-- **Resolving conflicts.** When the status-bar badge appears, open the conflict panel to see the two-column diff. Adopt individual changes or take a whole side, then confirm — the losing revision is cleaned up so CouchDB converges.
+- **Resolving conflicts.** Most conflicts never reach you: every sync settle first resolves automatically what can be resolved safely (see the feature list above), and only what is left over is counted in the status-bar badge. When the badge appears, open the conflict panel to see the two-column diff. Adopt individual changes or take a whole side, then confirm — the losing revision is cleaned up so CouchDB converges. A conflict that is still open when the next settle arrives may be resolved automatically in the meantime; the panel then moves on to the next one.
 - **Viewing history.** Run the command **"Vaultbridge: Datei-Verlauf anzeigen"** (Show file history) for the active note to browse revisions, diff against the current version, and restore one.
 - **Rotating the passphrase.** Use the **"Passphrase ändern"** button in Vaultbridge's settings. All current files are re-encrypted with the new key; other devices adopt it automatically the next time they sync. Your history remains readable throughout.
 
