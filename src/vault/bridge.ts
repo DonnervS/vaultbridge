@@ -164,6 +164,11 @@ export class VaultBridge {
       // Pulls gelöscht und wieder angelegt worden sein.
       if (!this.app.vault.getAbstractFileByPath(path)) {
         try {
+          // deleteFile() stempelt mit Date.now() — hier der Moment des
+          // Nachholens (nach dem Erst-Pull), nicht der ursprünglichen
+          // Löschung. Eine spät erkannte Löschung kann dadurch eine wirklich
+          // neuere Remote-Bearbeitung bei "newest wins" überstimmen; die
+          // unterlegene Fassung bleibt aber als Sidecar erhalten.
           await this.store.deleteFile(path, this.getDeviceName());
         } catch (e) {
           new Notice(`Vaultbridge: Löschung konnte nicht nachgeholt werden (${path}): ${String(e)}`);
@@ -479,6 +484,12 @@ export class VaultBridge {
         }
         for (const path of plan.deleteRemotes) {
           if (this.pendingHiddenDeletes.has(path)) {
+            // deleteFile() stempelt mit Date.now() — hier der Moment der
+            // BESTÄTIGUNG (eine Runde nach der Erkennung, bewusst verzögert),
+            // nicht der ursprünglichen Löschung. Eine spät erkannte Löschung
+            // kann dadurch eine wirklich neuere Remote-Bearbeitung bei
+            // "newest wins" überstimmen; die unterlegene Fassung bleibt aber
+            // als Sidecar erhalten.
             await this.store.deleteFile(path, this.getDeviceName());
             this.pendingHiddenDeletes.delete(path);
           } else {

@@ -491,6 +491,11 @@ export default class VaultbridgePlugin extends Plugin {
     if (this.rotating) { new Notice("Vaultbridge: Rotation läuft — Sync pausiert."); return; }
     if (!this.localDb || !this.remote) { new Notice("Vaultbridge: nicht verbunden."); return; }
     const generation = this.connectGeneration;
+    // Wie in catchUpInitialPull(): ein stop() OHNE Generationswechsel
+    // (Rotationspause, restartSync()) kann in die folgenden awaits
+    // hineinfallen — reconcileFromStore() meldet dann trotzdem Erfolg, obwohl
+    // der Durchlauf vorzeitig abgebrochen wurde und nichts materialisiert hat.
+    const lifecycle = this.bridge?.lifecycle();
     const last = await new Promise<SyncStatus>((resolve) => {
       startSync(this.localDb!, this.remote!, { live: false }, (s, info) => {
         this.statusBar.setStatus(s, info);
@@ -504,8 +509,18 @@ export default class VaultbridgePlugin extends Plugin {
     // der einzige Nachweis für einen vollständigen Pull. Erst danach, damit
     // reconcileHidden() nicht doppelt läuft (runInitialUpload erledigt es).
     // Nur bei unveränderter Verbindung: sonst würde der Nachweis dieses Syncs
-    // dem Riegel einer inzwischen anderen Datenbank gutgeschrieben.
-    if (last === "idle" && generation === this.connectGeneration) await this.markInitialPullDone();
+    // dem Riegel einer inzwischen anderen Datenbank gutgeschrieben. Zusätzlich
+    // Lifecycle/isStopped prüfen (siehe catchUpInitialPull) — sonst setzt ein
+    // Durchlauf, der wegen eines zwischenzeitlichen stop()/start() vorzeitig
+    // ausstieg, den Riegel trotzdem.
+    if (
+      last === "idle" &&
+      generation === this.connectGeneration &&
+      !this.bridge?.isStopped() &&
+      this.bridge?.lifecycle() === lifecycle
+    ) {
+      await this.markInitialPullDone();
+    }
     void this.refreshConflicts();
   }
 
