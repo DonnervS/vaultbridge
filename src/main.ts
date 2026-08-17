@@ -6,14 +6,15 @@ import { deriveKeys, encryptBytes, decryptBytes, pathId, VaultKeys } from "./cry
 import { base64urlToBytes, bytesToBase64url, utf8 } from "./crypto/encoding";
 import { PouchDB } from "./store/pouch";
 import { VaultStore } from "./store/store";
+import type { ConflictVersion } from "./store/store";
 import { startSync, SyncHandle, SyncStatus } from "./store/replication";
-import { EchoGuard } from "./vault/applyChange";
+import { EchoGuard, contentHash } from "./vault/applyChange";
+import { planAutoResolve, ConflictBranch } from "./conflicts/autoResolve";
 import { VaultBridge } from "./vault/bridge";
 import { DEFAULT_RULES, SyncRules, migrateRules, syncRuleState, setInclusion } from "./vault/rules";
 import { promptPassphrase } from "./ui/PassphrasePromptModal";
 import { ConflictListView, VIEW_TYPE_CONFLICTS } from "./ui/ConflictListView";
 import { ConflictDiffView, VIEW_TYPE_CONFLICT_DIFF } from "./ui/ConflictDiffView";
-import { ConflictSession } from "./conflicts/session";
 import { SyncMode, shouldReplicateNow } from "./store/syncModes";
 import { planPluginReload } from "./plugins/pluginSync";
 import { GeneratorModal } from "./ui/GeneratorModal";
@@ -88,6 +89,8 @@ export default class VaultbridgePlugin extends Plugin {
   // gleichzeitige store.rotate()-Aufrufe mit unterschiedlichen Schlüsseln
   // würden den Store beschädigen.
   private rotating = false;
+  // Verhindert, dass zwei Settles gleichzeitig auflösen.
+  private autoResolving = false;
   // Schlüssel (Server+DB) der aktuellen Verbindung, für settings.initialPullDone.
   private currentPullKey: string | null = null;
   // Läuft gerade ein nachgeholter Erst-Pull? Sonst startet jedes Sync-Settle
@@ -710,12 +713,95 @@ export default class VaultbridgePlugin extends Plugin {
     }
   }
 
+  /**
+   * Löst Konflikte automatisch auf, sobald das gefahrlos möglich ist:
+   * inhaltsgleiche Zweige werden still verworfen, bei echten Abweichungen
+   * gewinnt die neuere Fassung und die unterlegene wird als Sidecar gesichert
+   * und gemeldet. Läuft bei jedem Sync-Settle.
+   *
+   * Gated auf den Erstabgleich: solange der nicht durch ist, kennt dieses Gerät
+   * den Datenbestand nur teilweise und dürfte gar nichts entscheiden.
+   */
+  async autoResolveConflicts(): Promise<void> {
+    const store = this.store;
+    if (!store || this.autoResolving || this.rotating) return;
+    if (!this.initialPullSettled()) return;
+    this.autoResolving = true;
+    try {
+      for (const id of await store.listConflicts()) {
+        try {
+          const c = await store.getConflict(id);
+          if (!c) continue;
+          const versions = [c.local, ...c.remotes];
+          const branches = new Map<string, ConflictVersion>();
+          for (const v of versions) branches.set(v.rev, v);
+          const toBranch = async (v: ConflictVersion): Promise<ConflictBranch> => ({
+            rev: v.rev,
+            hash: await contentHash(v.bytes),
+            // changedAt bevorzugt; Dokumente aus 1.2.x haben es nicht, dann
+            // ersatzweise mtime (bei versteckten Dateien 0 — dann entscheidet
+            // der Revisions-Tiebreaker).
+            changedAt: v.meta.changedAt ?? v.meta.mtime ?? 0,
+            deleted: v.deleted,
+          });
+          const winner = await toBranch(c.local);
+          const others: ConflictBranch[] = [];
+          for (const r of c.remotes) others.push(await toBranch(r));
+
+          const plan = planAutoResolve(winner, others);
+          if (!plan) continue;
+
+          if (plan.keep === c.local.rev) {
+            // Der gültige Zweig bleibt gültig — Verwerfen genügt, kein Schreiben.
+            await store.pruneConflictRevs(c.id, plan.prune);
+          } else {
+            const keep = branches.get(plan.keep);
+            if (!keep) continue;
+            await store.resolveConflict(c.id, c.path, keep.bytes, keep.meta, plan.prune);
+          }
+
+          if (plan.kind === "newest-wins") {
+            const loser = branches.get(plan.loser.rev);
+            const keep = branches.get(plan.keep);
+            if (loser) await this.saveConflictSidecar(c.path, loser.bytes);
+            new Notice(
+              `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
+                `von ${this.deviceLabel(keep?.meta.device)}; die Fassung von ${this.deviceLabel(loser?.meta.device)} ` +
+                `liegt als „${c.path}.vaultbridge-konflikt" im Vault.`,
+              15000,
+            );
+          }
+        } catch (e) {
+          // Eine Datei darf den Durchlauf nicht abbrechen.
+          new Notice(`Vaultbridge: Konflikt konnte nicht automatisch gelöst werden (${id}): ${String(e)}`);
+        }
+      }
+    } finally {
+      this.autoResolving = false;
+    }
+  }
+
+  /** Anzeigename eines Geräts, mit Rückfallwert für Dokumente aus 1.2.x. */
+  private deviceLabel(device: string | undefined): string {
+    return device && device.length > 0 ? device : "einem unbekannten Gerät";
+  }
+
+  /** Sichert eine unterlegene Fassung neben der Datei, damit nichts verloren geht. */
+  private async saveConflictSidecar(path: string, bytes: Uint8Array): Promise<void> {
+    try {
+      await this.app.vault.adapter.writeBinary(`${path}.vaultbridge-konflikt`, bytes.slice().buffer);
+    } catch (e) {
+      new Notice(`Vaultbridge: Sicherung der unterlegenen Fassung fehlgeschlagen (${path}): ${String(e)}`);
+    }
+  }
+
   private async refreshConflicts(): Promise<void> {
     if (!this.store) {
       this.statusBar.setConflicts(0);
       return;
     }
     try {
+      await this.autoResolveConflicts();
       const ids = await this.store.listConflicts();
       this.statusBar.setConflicts(ids.length);
       // Nur die LISTE (rechts) aktualisieren — der Diff-Bereich (Mitte) bleibt
@@ -832,43 +918,22 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   /**
-   * Löst alle Konflikte auf, deren Versionen inhaltlich identisch sind (nur
-   * divergierende CouchDB-Revisionen, kein echter Unterschied) — bei diesen geht
-   * durch das Auflösen nichts verloren. Echte Konflikte (mit Unterschieden oder
-   * mehreren Konfliktzweigen) bleiben unangetastet und müssen einzeln bearbeitet
-   * werden.
+   * Manuelles Nachfassen für den Fall, dass jemand nicht auf den nächsten
+   * Sync-Settle warten will. Nutzt exakt dieselbe Logik wie der Automatismus.
    */
   async resolveIdenticalConflicts(): Promise<void> {
     if (!this.store) { new Notice("Vaultbridge: nicht verbunden."); return; }
-    let resolved = 0;
-    let remaining = 0;
-    try {
-      const ids = await this.store.listConflicts();
-      for (const id of ids) {
-        const c = await this.store.getConflict(id);
-        if (!c) continue;
-        const identical =
-          !c.isBinary &&
-          c.remotes.length === 1 &&
-          new ConflictSession({
-            id: c.id, path: c.path, isBinary: c.isBinary,
-            local: { rev: c.local.rev, bytes: c.local.bytes },
-            remote: { rev: c.remotes[0].rev, bytes: c.remotes[0].bytes },
-          }).hunks.every((h) => h.kind === "equal");
-        if (!identical) { remaining++; continue; }
-        await this.store.resolveConflict(
-          c.id, c.path, c.local.bytes, c.local.meta, c.remotes.map((r) => r.rev),
-        );
-        resolved++;
-      }
-      new Notice(
-        `Vaultbridge: ${resolved} identische Konflikte gelöst` +
-          (remaining > 0 ? `, ${remaining} echte verbleiben.` : "."),
-        8000,
-      );
-    } catch (e) {
-      new Notice(`Vaultbridge: Auflösen fehlgeschlagen: ${String(e)}`);
+    if (!this.initialPullSettled()) {
+      new Notice("Vaultbridge: Erstabgleich läuft noch — bitte kurz warten.");
+      return;
     }
+    const before = (await this.store.listConflicts()).length;
+    await this.autoResolveConflicts();
+    const after = (await this.store.listConflicts()).length;
+    new Notice(
+      `Vaultbridge: ${before - after} Konflikte gelöst` + (after > 0 ? `, ${after} verbleiben.` : "."),
+      8000,
+    );
     this.activeConflictId = null;
     await this.refreshConflicts();
     this.renderConflictDiff();
