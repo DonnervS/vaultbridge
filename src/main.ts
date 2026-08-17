@@ -19,6 +19,7 @@ import { planPluginReload } from "./plugins/pluginSync";
 import { GeneratorModal } from "./ui/GeneratorModal";
 import { HistoryModal } from "./ui/HistoryModal";
 import { makeVerifyToken, checkVerifyToken, needsAdoption } from "./crypto/rotation";
+import { initialPullKey } from "./store/initialSync";
 
 export interface VaultbridgeSettings {
   setupString: string;
@@ -39,6 +40,11 @@ export interface VaultbridgeSettings {
   // manuellen Befehl "Vaultbridge: Verbinden". Bei getrennter Passphrase (pp:
   // "separate") wird diese beim Autostart per Prompt abgefragt.
   autostart: boolean;
+  // Pro Server+Datenbank: wurde gegen diesen Datenbestand schon einmal
+  // vollständig gepullt? Erst dann darf der Erst-Upload laufen. Ohne diesen
+  // Riegel lädt ein frisch verbundenes Gerät seinen kompletten Vault gegen
+  // einen leeren Store hoch und erzeugt auf jeder Datei einen Konflikt.
+  initialPullDone: Record<string, boolean>;
 }
 
 const DEFAULT_SETTINGS: VaultbridgeSettings = {
@@ -51,6 +57,7 @@ const DEFAULT_SETTINGS: VaultbridgeSettings = {
   intervalSeconds: 120,
   epoch: 0,
   autostart: true,
+  initialPullDone: {},
 };
 
 export default class VaultbridgePlugin extends Plugin {
@@ -80,6 +87,8 @@ export default class VaultbridgePlugin extends Plugin {
   // gleichzeitige store.rotate()-Aufrufe mit unterschiedlichen Schlüsseln
   // würden den Store beschädigen.
   private rotating = false;
+  // Schlüssel (Server+DB) der aktuellen Verbindung, für settings.initialPullDone.
+  private currentPullKey: string | null = null;
   // Zählt jede connect()-Runde. connect() legt seine Ressourcen ERST NACH den
   // awaits an (Passphrase-Prompt, PBKDF2) — das disconnect() an seinem Anfang
   // kann sie also nicht kennen. Wird währenddessen erneut verbunden oder das
@@ -94,6 +103,10 @@ export default class VaultbridgePlugin extends Plugin {
   private readonly onSyncStatus = (s: SyncStatus, info?: string): void => {
     this.statusBar.setStatus(s, info);
     if (s === "idle" || s === "paused") {
+      // Ein sauber durchgelaufener Sync-Zyklus ist derselbe Nachweis wie ein
+      // abgeschlossener Einzel-Pull: damit holt ein Gerät, das offline
+      // gestartet ist, seinen Erstabgleich beim ersten Settle nach.
+      void this.markInitialPullDone();
       // Bei JEDEM Settle nachziehen (nicht nur einmal): der Pull kommt in Schüben,
       // und Notizen, deren Chunks in einem früheren Schub noch fehlten, werden erst
       // in einer späteren Runde dekodierbar. reconcileFromStore ist nach dem ersten
@@ -223,6 +236,7 @@ export default class VaultbridgePlugin extends Plugin {
       const store = new VaultStore(this.localDb, keys, payload.opts.chunkSize);
       this.store = store;
       const guard = new EchoGuard();
+      this.currentPullKey = initialPullKey(payload.couchUrl, payload.db);
       this.bridge = new VaultBridge(
         this.app,
         store,
@@ -247,17 +261,38 @@ export default class VaultbridgePlugin extends Plugin {
       // schreiben. Component.register() räumt sie beim Unload zuverlässig ab,
       // unabhängig davon, ob disconnect() sie erwischt. stop() ist idempotent.
       this.register(() => ownBridge?.stop());
+      // Listener sofort aktiv, Erst-Upload aber gesperrt (siehe runInitialUpload).
       this.bridge.start();
 
       const remoteUrl = `${payload.couchUrl.replace(/\/$/, "")}/${encodeURIComponent(payload.db)}`;
       const remote = new PouchDB(remoteUrl, { auth: { username: payload.user, password: payload.pass } });
       this.remote = remote;
 
+      if (this.settings.initialPullDone[this.currentPullKey]) {
+        await this.bridge.runInitialUpload();
+      } else {
+        // Erst ziehen, dann schieben. Diese Reihenfolge ist der eigentliche Fix
+        // gegen flächendeckende Konflikte beim Hinzufügen eines Geräts.
+        this.statusBar.setStatus("active", "Erstabgleich …");
+        try {
+          await this.localDb.replicate.from(remote);
+          if (stale()) { abandon(); return; } // zwischenzeitlich getrennt
+          await this.bridge.reconcileFromStore();
+          await this.markInitialPullDone();
+        } catch (e) {
+          new Notice(
+            "Vaultbridge: Erstabgleich noch nicht möglich — es wird vorerst nichts hochgeladen. " +
+              `Sobald die Verbindung steht, wird er automatisch nachgeholt. (${String(e)})`,
+            10000,
+          );
+        }
+      }
+      if (stale()) { abandon(); return; }
+
       this.startSyncForMode();
 
       new Notice("Vaultbridge verbunden.");
       void this.refreshConflicts();
-      void this.bridge.reconcileHidden();
       void this.checkAdoption();
     } catch (e) {
       // Überholte Runde: nur die eigenen Listener abräumen. Ein disconnect()
@@ -276,6 +311,7 @@ export default class VaultbridgePlugin extends Plugin {
     this.connectGeneration++;
     this.stopSyncStack();
     this.bridge = null;
+    this.currentPullKey = null;
     void this.localDb?.close();
     this.localDb = null;
     this.remote = null;
@@ -542,6 +578,35 @@ export default class VaultbridgePlugin extends Plugin {
     } finally {
       this.checkingAdoption = false;
     }
+  }
+
+  /** Ist der Erstabgleich für die aktuelle Verbindung durch? */
+  private initialPullSettled(): boolean {
+    return !!this.currentPullKey && this.settings.initialPullDone[this.currentPullKey] === true;
+  }
+
+  /**
+   * Merkt den abgeschlossenen Erst-Pull und gibt den Erst-Upload frei.
+   * Aufgerufen nach dem expliziten Pull in connect() UND aus onSyncStatus:
+   * ein sauber durchgelaufener Sync-Zyklus ist derselbe Nachweis wie ein
+   * abgeschlossener Einzel-Pull. Damit holt sich ein Gerät, das offline
+   * gestartet ist, den Erstabgleich beim ersten erfolgreichen Settle.
+   */
+  private async markInitialPullDone(): Promise<void> {
+    const key = this.currentPullKey;
+    // Bridge in eine lokale Variable: nach dem await unten kann das Feld
+    // durch ein zwischenzeitliches disconnect() null sein. runInitialUpload()
+    // auf einer gestoppten Bridge ist harmlos (sie bricht selbst ab).
+    const bridge = this.bridge;
+    if (!key || !bridge) return;
+    if (this.settings.initialPullDone[key] !== true) {
+      // Bewusst neues Objekt statt In-Place-Mutation: ohne eigenes
+      // initialPullDone in data.json zeigt settings.initialPullDone auf das
+      // geteilte Objekt aus DEFAULT_SETTINGS (Object.assign kopiert flach).
+      this.settings.initialPullDone = { ...this.settings.initialPullDone, [key]: true };
+      await this.saveSettings();
+    }
+    await bridge.runInitialUpload();
   }
 
   private async refreshConflicts(): Promise<void> {
