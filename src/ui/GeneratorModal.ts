@@ -151,9 +151,19 @@ export class GeneratorModal extends Modal {
       return;
     }
 
+    // Bei einem als Fehler markierten URL-Eingabewert keinen String erzeugen — sonst landet
+    // genau die kaputte URL im vbridge1:-String, und der Fehler taucht erst auf dem
+    // Empfängergerät als fehlgeschlagene Verbindung wieder auf. Warn-Hinweise (lokale
+    // Adresse, fehlender Port, unverschlüsseltes http im eigenen Netz) blockieren nicht.
+    const { hints, normalized } = checkCouchUrl(this.couchUrl);
+    const errorHint = hints.find((h) => h.level === "error");
+    if (errorHint) {
+      new Notice(`CouchDB-URL: ${errorHint.message}`);
+      return;
+    }
+
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const embedded = this.passphrase.trim().length > 0;
-    const { normalized } = checkCouchUrl(this.couchUrl);
     const payload: SetupPayload = {
       v: 1,
       couchUrl: normalized || this.couchUrl,

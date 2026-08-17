@@ -9,6 +9,10 @@ describe("checkCouchUrl", () => {
     expect(checkCouchUrl("   ")).toEqual({ hints: [], normalized: "" });
   });
 
+  it("meldet zur leeren Zeichenkette nichts", () => {
+    expect(checkCouchUrl("")).toEqual({ hints: [], normalized: "" });
+  });
+
   it("verlangt ein Protokoll", () => {
     expect(levels("192.168.20.30:5984")).toContain("error");
     expect(text("192.168.20.30:5984")).toContain("http://");
