@@ -78,9 +78,22 @@ describe("makeRequestUrlFetch", () => {
     expect(new Uint8Array(captured[0].body as ArrayBuffer)).toEqual(payload);
   });
 
-  it("akzeptiert ein Request-artiges Objekt als erstes Argument", async () => {
+  it("akzeptiert eine URL-Instanz als erstes Argument", async () => {
     const { request, captured } = fakeRequest({ status: 200, body: "{}" });
     await makeRequestUrlFetch(request)(new URL("http://host:5984/db"));
     expect(captured[0].url).toBe("http://host:5984/db");
+  });
+
+  it("liest die URL aus einem Request-artigen Objekt (Duck-Typing, keine URL- oder String-Instanz)", async () => {
+    const { request, captured } = fakeRequest({ status: 200, body: "{}" });
+    const requestLike = { url: "http://host:5984/db" } as unknown as Request;
+    await makeRequestUrlFetch(request)(requestLike);
+    expect(captured[0].url).toBe("http://host:5984/db");
+  });
+
+  it("verwendet GET als Standardmethode, wenn init.method fehlt", async () => {
+    const { request, captured } = fakeRequest({ status: 200, body: "{}" });
+    await makeRequestUrlFetch(request)("http://host:5984/");
+    expect(captured[0].method).toBe("GET");
   });
 });
