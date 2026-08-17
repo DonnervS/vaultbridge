@@ -758,6 +758,29 @@ export default class VaultbridgePlugin extends Plugin {
           // siehe toBranch()/versions oben.
           const keep = branches.get(plan.keep);
           if (!keep) continue;
+          const keepLabel = this.deviceLabel(keep.meta.device);
+
+          // Bei "newest-wins" MUSS die unterlegene Fassung sicher auf der Platte
+          // liegen, BEVOR der Store sie verwirft — sonst ist sie bei einem
+          // Schreibfehler unwiederbringlich weg (der Store hat den Zweig da schon
+          // gelöscht). Deshalb: erst sichern, erst bei Erfolg auflösen. Schlägt die
+          // Sicherung fehl, bleibt der Konflikt offen (sichere Richtung) und wird
+          // beim nächsten Settle erneut versucht.
+          let loser: ConflictVersion | undefined;
+          if (plan.kind === "newest-wins") {
+            loser = branches.get(plan.loser.rev);
+            const loserLabel = this.deviceLabel(loser?.meta.device);
+            const saved = loser ? await this.saveConflictSidecar(c.path, loser.bytes) : false;
+            if (!saved) {
+              new Notice(
+                `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert (${keepLabel} vs. ${loserLabel}); ` +
+                  `die unterlegene Fassung konnte nicht gesichert werden. Der Konflikt bleibt offen und wird ` +
+                  `beim nächsten Abgleich erneut versucht.`,
+                15000,
+              );
+              continue;
+            }
+          }
 
           if (plan.keep === c.local.rev) {
             // Der gültige Zweig bleibt gültig — Verwerfen genügt, kein Schreiben.
@@ -767,19 +790,10 @@ export default class VaultbridgePlugin extends Plugin {
           }
 
           if (plan.kind === "newest-wins") {
-            const loser = branches.get(plan.loser.rev);
-            const saved = loser ? await this.saveConflictSidecar(c.path, loser.bytes) : false;
-            const keepLabel = this.deviceLabel(keep.meta.device);
             const loserLabel = this.deviceLabel(loser?.meta.device);
             new Notice(
-              saved
-                ? `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
-                    `von ${keepLabel}; die Fassung von ${loserLabel} liegt als „${c.path}.vaultbridge-konflikt" im Vault.`
-                // Die Sicherung ist fehlgeschlagen — das darf NICHT als Erfolg gemeldet werden,
-                // sonst hält der Nutzer die unterlegene Fassung für sicher, während sie bereits
-                // aus dem Store verworfen und nirgends abgelegt ist.
-                : `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
-                    `von ${keepLabel}; die Fassung von ${loserLabel} konnte nicht gesichert werden.`,
+              `Vaultbridge: „${c.path}" wurde auf beiden Seiten geändert. Übernommen wurde die neuere Fassung ` +
+                `von ${keepLabel}; die Fassung von ${loserLabel} liegt als „${c.path}.vaultbridge-konflikt" im Vault.`,
               15000,
             );
           }
