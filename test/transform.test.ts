@@ -33,4 +33,27 @@ describe("transform", () => {
     const { note } = await encodeFile(keys, "a.bin", bytes, meta, 2);
     expect(note.chunks[0]).toBe(note.chunks[1]);
   });
+
+  it("erhält device und changedAt über encode/decode hinweg", async () => {
+    const keys = await deriveKeys("pw", new Uint8Array(16).fill(5), 50000);
+    const meta: FileMeta = {
+      mtime: 10, ctime: 5, size: 4, mime: "text/markdown", isBinary: false,
+      device: "Mac-7f3", changedAt: 1770000000000,
+    };
+    const { note, chunks } = await encodeFile(keys, "N.md", utf8.encode("text"), meta, 1024);
+    const byId = new Map(chunks.map((c) => [c._id, c]));
+    const decoded = await decodeFile(keys, note, (id) => Promise.resolve(byId.get(id)!));
+    expect(decoded.meta.device).toBe("Mac-7f3");
+    expect(decoded.meta.changedAt).toBe(1770000000000);
+  });
+
+  it("liest Metadaten aus 1.2.x ohne device/changedAt weiterhin", async () => {
+    const keys = await deriveKeys("pw", new Uint8Array(16).fill(5), 50000);
+    const alt: FileMeta = { mtime: 10, ctime: 5, size: 4, mime: "", isBinary: false };
+    const { note, chunks } = await encodeFile(keys, "A.md", utf8.encode("text"), alt, 1024);
+    const byId = new Map(chunks.map((c) => [c._id, c]));
+    const decoded = await decodeFile(keys, note, (id) => Promise.resolve(byId.get(id)!));
+    expect(decoded.meta.device).toBeUndefined();
+    expect(decoded.meta.changedAt).toBeUndefined();
+  });
 });
