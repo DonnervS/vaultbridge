@@ -1,5 +1,6 @@
-import { EventRef, Menu, Notice, Platform, Plugin, TAbstractFile } from "obsidian";
+import { EventRef, Menu, Notice, Platform, Plugin, TAbstractFile, requestUrl } from "obsidian";
 import { VaultbridgeSettingsTab } from "./ui/SettingsTab";
+import { makeRequestUrlFetch } from "./store/obsidianFetch";
 import { StatusBar } from "./ui/StatusBar";
 import { decodeSetup, encodeSetup } from "./setup/setupString";
 import { deriveKeys, encryptBytes, decryptBytes, pathId, VaultKeys } from "./crypto/crypto";
@@ -47,6 +48,11 @@ export interface VaultbridgeSettings {
   // Riegel lädt ein frisch verbundenes Gerät seinen kompletten Vault gegen
   // einen leeren Store hoch und erzeugt auf jeder Datei einen Konflikt.
   initialPullDone: Record<string, boolean>;
+  // Transportweg zur CouchDB. "fetch" (Standard) ist das Browser-fetch mit
+  // Streaming — bewährt und unverändert. "requestUrl" leitet über Obsidians
+  // eigene HTTP-Schicht um und umgeht damit CORS und Chromiums Local Network
+  // Access; nötig, wenn die CouchDB auf einer lokalen Adresse läuft.
+  transport: "fetch" | "requestUrl";
 }
 
 const DEFAULT_SETTINGS: VaultbridgeSettings = {
@@ -60,6 +66,7 @@ const DEFAULT_SETTINGS: VaultbridgeSettings = {
   epoch: 0,
   autostart: true,
   initialPullDone: {},
+  transport: "fetch",
 };
 
 export default class VaultbridgePlugin extends Plugin {
@@ -298,7 +305,12 @@ export default class VaultbridgePlugin extends Plugin {
       this.bridge.start();
 
       const remoteUrl = `${payload.couchUrl.replace(/\/$/, "")}/${encodeURIComponent(payload.db)}`;
-      const remote = new PouchDB(remoteUrl, { auth: { username: payload.user, password: payload.pass } });
+      const remote = new PouchDB(remoteUrl, {
+        auth: { username: payload.user, password: payload.pass },
+        ...(this.settings.transport === "requestUrl"
+          ? { fetch: makeRequestUrlFetch(requestUrl) }
+          : {}),
+      });
       this.remote = remote;
 
       if (this.settings.initialPullDone[this.currentPullKey]) {

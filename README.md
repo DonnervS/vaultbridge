@@ -28,6 +28,10 @@ Vaultbridge keeps an Obsidian vault in sync across desktop and mobile through a 
 
 CORS misconfiguration is the single most common onboarding problem. Vaultbridge's connection self-test checks for it explicitly and tells you what to fix.
 
+If your CouchDB lives on a local IP, recent Obsidian builds may block the connection
+(Chromium's Local Network Access). Switch **Connection method** to **Obsidian
+(requestUrl)** in the settings — see [`docs/server-setup.md`](docs/server-setup.md).
+
 ---
 
 ## Installation

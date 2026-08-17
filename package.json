@@ -1,6 +1,6 @@
 {
   "name": "vaultbridge",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Ende-zu-Ende-verschlüsseltes Obsidian-Vault-Sync gegen CouchDB.",
   "type": "module",
   "scripts": {
