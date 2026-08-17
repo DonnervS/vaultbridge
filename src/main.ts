@@ -89,6 +89,9 @@ export default class VaultbridgePlugin extends Plugin {
   private rotating = false;
   // Schlüssel (Server+DB) der aktuellen Verbindung, für settings.initialPullDone.
   private currentPullKey: string | null = null;
+  // Läuft gerade ein nachgeholter Erst-Pull? Sonst startet jedes Sync-Settle
+  // eine weitere vollständige Replikation, während die erste noch läuft.
+  private catchingUpPull = false;
   // Zählt jede connect()-Runde. connect() legt seine Ressourcen ERST NACH den
   // awaits an (Passphrase-Prompt, PBKDF2) — das disconnect() an seinem Anfang
   // kann sie also nicht kennen. Wird währenddessen erneut verbunden oder das
@@ -103,10 +106,12 @@ export default class VaultbridgePlugin extends Plugin {
   private readonly onSyncStatus = (s: SyncStatus, info?: string): void => {
     this.statusBar.setStatus(s, info);
     if (s === "idle" || s === "paused") {
-      // Ein sauber durchgelaufener Sync-Zyklus ist derselbe Nachweis wie ein
-      // abgeschlossener Einzel-Pull: damit holt ein Gerät, das offline
-      // gestartet ist, seinen Erstabgleich beim ersten Settle nach.
-      void this.markInitialPullDone();
+      // Erst-Pull ausschließlich bei "paused" nachziehen. "idle" entsteht hier
+      // aus dem complete-Event, und das liefert ein LIVE-Sync nur beim Abbruch
+      // (cancel) — also beim Abbau der Verbindung, etwa aus restartSync() oder
+      // der Rotationspause heraus. Ein Riegel-Vermerk an dieser Stelle würde
+      // einen nie gelaufenen Erst-Pull als erledigt festschreiben.
+      if (s === "paused") void this.catchUpInitialPull();
       // Bei JEDEM Settle nachziehen (nicht nur einmal): der Pull kommt in Schüben,
       // und Notizen, deren Chunks in einem früheren Schub noch fehlten, werden erst
       // in einer späteren Runde dekodierbar. reconcileFromStore ist nach dem ersten
@@ -278,8 +283,18 @@ export default class VaultbridgePlugin extends Plugin {
           await this.localDb.replicate.from(remote);
           if (stale()) { abandon(); return; } // zwischenzeitlich getrennt
           await this.bridge.reconcileFromStore();
+          // Auch hier: reconcileFromStore() schreibt den ganzen Store in den
+          // Vault und dauert entsprechend. markInitialPullDone() liest danach
+          // wieder die Felder (currentPullKey, bridge) — eine überholte Runde
+          // würde den Riegel der NEUEN Verbindung setzen, deren Pull noch gar
+          // nicht gelaufen ist.
+          if (stale()) { abandon(); return; }
           await this.markInitialPullDone();
+          this.statusBar.setStatus("idle"); // Erstabgleich durch
         } catch (e) {
+          // Ohne eigenen Status bliebe im manuellen Modus (kein weiteres
+          // Sync-Event) dauerhaft "Erstabgleich …" stehen.
+          this.statusBar.setStatus("error", "Erstabgleich ausstehend");
           new Notice(
             "Vaultbridge: Erstabgleich noch nicht möglich — es wird vorerst nichts hochgeladen. " +
               `Sobald die Verbindung steht, wird er automatisch nachgeholt. (${String(e)})`,
@@ -431,14 +446,22 @@ export default class VaultbridgePlugin extends Plugin {
   async syncOnce(): Promise<void> {
     if (this.rotating) { new Notice("Vaultbridge: Rotation läuft — Sync pausiert."); return; }
     if (!this.localDb || !this.remote) { new Notice("Vaultbridge: nicht verbunden."); return; }
-    await new Promise<void>((resolve) => {
+    const generation = this.connectGeneration;
+    const last = await new Promise<SyncStatus>((resolve) => {
       startSync(this.localDb!, this.remote!, { live: false }, (s, info) => {
         this.statusBar.setStatus(s, info);
-        if (s === "idle" || s === "error") resolve();
+        if (s === "idle" || s === "error") resolve(s);
       });
     });
     await this.bridge?.reconcileFromStore();
     await this.bridge?.reconcileHidden();
+    // Beim Einmal-Sync (live: false) heißt "idle" wirklich "durchgelaufen"
+    // (complete) — in den Modi ohne Live-Sync (interval, onOpenClose, manual)
+    // der einzige Nachweis für einen vollständigen Pull. Erst danach, damit
+    // reconcileHidden() nicht doppelt läuft (runInitialUpload erledigt es).
+    // Nur bei unveränderter Verbindung: sonst würde der Nachweis dieses Syncs
+    // dem Riegel einer inzwischen anderen Datenbank gutgeschrieben.
+    if (last === "idle" && generation === this.connectGeneration) await this.markInitialPullDone();
     void this.refreshConflicts();
   }
 
@@ -607,6 +630,47 @@ export default class VaultbridgePlugin extends Plugin {
       await this.saveSettings();
     }
     await bridge.runInitialUpload();
+  }
+
+  /**
+   * Holt aus einem Sync-Settle heraus den Erst-Pull nach, wenn er beim
+   * Verbinden nicht möglich war (offline gestartetes Gerät). Ohne dieses
+   * Nachholen bliebe der Erst-Upload die ganze Sitzung gesperrt — und die in
+   * der Zwischenzeit gelöschten Dateien stehen nur in der Warteschlange im
+   * Arbeitsspeicher der Bridge.
+   *
+   * Nachweis für einen durchgelaufenen Pull ist ausschließlich ein erfolgreich
+   * aufgelöstes replicate.from(), NICHT das "paused" des Live-Syncs: PouchDBs
+   * Sync-Wrapper reicht das Fehlerargument seiner beiden Richtungen nicht
+   * weiter (pushPaused/pullPaused emittieren 'paused' ohne err), ein Backoff
+   * nach Verbindungsfehler ist dort von "eingeholt" also nicht zu
+   * unterscheiden. Ausgerechnet das offline gestartete Gerät würde sonst
+   * seinen Vault gegen einen leeren Store hochladen. Der Nach-Pull ist billig:
+   * er teilt den Checkpoint mit dem Pull des Live-Syncs und findet im
+   * Normalfall nichts mehr zu holen.
+   */
+  private async catchUpInitialPull(): Promise<void> {
+    if (this.rotating) return; // während store.rotate() nicht replizieren
+    // Riegel steht schon: nur den (von einem stop() zurückgerollten)
+    // Erst-Upload wieder freigeben. Idempotent, kein Pull nötig.
+    if (this.initialPullSettled()) { await this.markInitialPullDone(); return; }
+    if (this.catchingUpPull) return;
+    const localDb = this.localDb;
+    const remote = this.remote;
+    if (!localDb || !remote) return;
+    // Wie in connect(): nach dem await darf eine überholte Runde den Riegel
+    // der inzwischen gültigen Verbindung nicht setzen.
+    const generation = this.connectGeneration;
+    this.catchingUpPull = true;
+    try {
+      await localDb.replicate.from(remote);
+      if (generation !== this.connectGeneration) return;
+      await this.markInitialPullDone();
+    } catch {
+      /* offline oder Serverfehler: beim nächsten Settle erneut versuchen */
+    } finally {
+      this.catchingUpPull = false;
+    }
   }
 
   private async refreshConflicts(): Promise<void> {

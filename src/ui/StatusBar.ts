@@ -19,8 +19,13 @@ export class StatusBar {
     this.render();
   }
 
+  /**
+   * @param info Zusatz in Klammern hinter dem Label. Bewusst für JEDEN Status,
+   *   nicht nur für Fehler: connect() beschriftet damit den Erstabgleich
+   *   ("synct … (Erstabgleich …)"), sonst bliebe die Beschriftung wirkungslos.
+   */
   setStatus(status: SyncStatus, info?: string): void {
-    this.lastLabel = LABELS[status] + (status === "error" && info ? ` (${info})` : "");
+    this.lastLabel = LABELS[status] + (info ? ` (${info})` : "");
     this.render();
   }
 
