@@ -130,12 +130,24 @@ export class VaultBridge {
    * aufgerufen, wenn der Erst-Pull gegen diese Datenbank abgeschlossen ist —
    * ab dann hat reconcileExisting() einen gefüllten Store zum Vergleichen und
    * lädt nur noch echte Abweichungen hoch. Idempotent.
+   *
+   * Wird die Bridge währenddessen gestoppt (stop()), bricht der Lauf ab,
+   * sobald das bemerkt wird: bereits abgearbeitete Löschungen sind aus
+   * queuedDeletes entfernt, der Rest bleibt für einen späteren Lauf erhalten,
+   * reconcileHidden() entfällt für diesen Durchlauf, und initialUploadDone
+   * wird zurückgesetzt — sonst würde der Guard am Anfang dieser Methode einen
+   * späteren Aufruf auf derselben Instanz (z.B. nach restartSync()) blockieren,
+   * obwohl der Lauf nie fertig wurde.
    */
   async runInitialUpload(): Promise<void> {
     if (this.initialUploadDone) return;
     this.initialUploadDone = true;
     await this.reconcileExisting();
     for (const path of this.queuedDeletes) {
+      // Gestoppt -> ab hier nicht mehr in den (evtl. schon geschlossenen)
+      // Store schreiben. Rest der Warteschlange bleibt für einen späteren
+      // Lauf erhalten, nicht verwerfen.
+      if (this.stopped) { this.initialUploadDone = false; return; }
       // Nur löschen, was auch wirklich weg ist — eine Datei kann während des
       // Pulls gelöscht und wieder angelegt worden sein.
       if (!this.app.vault.getAbstractFileByPath(path)) {
@@ -145,8 +157,9 @@ export class VaultBridge {
           new Notice(`Vaultbridge: Löschung konnte nicht nachgeholt werden (${path}): ${String(e)}`);
         }
       }
+      this.queuedDeletes.delete(path);
     }
-    this.queuedDeletes.clear();
+    if (this.stopped) { this.initialUploadDone = false; return; }
     await this.reconcileHidden();
   }
 
