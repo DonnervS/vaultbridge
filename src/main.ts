@@ -80,6 +80,12 @@ export default class VaultbridgePlugin extends Plugin {
   // gleichzeitige store.rotate()-Aufrufe mit unterschiedlichen Schlüsseln
   // würden den Store beschädigen.
   private rotating = false;
+  // Zählt jede connect()-Runde. connect() legt seine Ressourcen ERST NACH den
+  // awaits an (Passphrase-Prompt, PBKDF2) — das disconnect() an seinem Anfang
+  // kann sie also nicht kennen. Wird währenddessen erneut verbunden oder das
+  // Plugin entladen, erkennt die überholte Runde das hieran und räumt sich
+  // selbst ab, statt sich nachträglich in die Felder zu schreiben.
+  private connectGeneration = 0;
   // Aktuell im Diff-Bereich (ConflictDiffView) geöffneter Konflikt. Von der
   // Liste (rechts) gesetzt, von der Diff-View (Mitte) gelesen.
   private activeConflictId: string | null = null;
@@ -190,15 +196,28 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   async connect(): Promise<void> {
-    this.disconnect(); // vorherige Verbindung sauber beenden (re-entrant-sicher)
+    this.disconnect(); // vorherige Verbindung sauber beenden
+    const generation = ++this.connectGeneration;
+    // Ist diese Runde von einem weiteren connect(), einem disconnect() oder dem
+    // Entladen des Plugins überholt worden? Dann darf sie nichts mehr in die
+    // Felder schreiben: sonst bleiben Vault-Listener und eine PouchDB-Instanz
+    // zurück, die niemand mehr stoppen kann. Bewusst KEIN close() auf die
+    // eigene PouchDB in diesem Fall — PouchDB teilt die IndexedDB-Verbindung
+    // pro Datenbankname (cachedDBs), ein close() hier würde die Verbindung der
+    // inzwischen gültigen Instanz mit schließen.
+    const stale = (): boolean => generation !== this.connectGeneration;
+    let ownBridge: VaultBridge | null = null;
+    const abandon = (): void => { ownBridge?.stop(); };
     try {
       const payload = decodeSetup(this.settings.setupString);
       let passphrase = payload.passphrase ?? "";
       if (payload.pp === "separate") {
         passphrase = (await promptPassphrase(this.app, "Passphrase eingeben")) ?? "";
+        if (stale()) return;
         if (!passphrase) { new Notice("Vaultbridge: keine Passphrase, abgebrochen."); return; }
       }
       const keys = await deriveKeys(passphrase, base64urlToBytes(payload.kdfSalt), payload.kdfIter);
+      if (stale()) return;
       this.keysForHistory = keys;
       this.localDb = new PouchDB(`vaultbridge-${payload.db}`);
       const store = new VaultStore(this.localDb, keys, payload.opts.chunkSize);
@@ -218,6 +237,15 @@ export default class VaultbridgePlugin extends Plugin {
         },
         (p) => this.onHiddenApplied(p),
       );
+      ownBridge = this.bridge;
+      // Sicherheitsnetz gegen genau den Fall, der diesen Fehler erzeugt hat:
+      // Wird das Plugin entladen, während connect() noch in einem await steht,
+      // läuft onunload()/disconnect() ins Leere und die gleich registrierten
+      // Vault-Listener würden diese Plugin-Instanz überleben — und dann bei
+      // JEDER Dateiänderung gegen eine geschlossene IndexedDB-Verbindung
+      // schreiben. Component.register() räumt sie beim Unload zuverlässig ab,
+      // unabhängig davon, ob disconnect() sie erwischt. stop() ist idempotent.
+      this.register(() => ownBridge?.stop());
       this.bridge.start();
 
       const remoteUrl = `${payload.couchUrl.replace(/\/$/, "")}/${encodeURIComponent(payload.db)}`;
@@ -231,6 +259,9 @@ export default class VaultbridgePlugin extends Plugin {
       void this.bridge.reconcileHidden();
       void this.checkAdoption();
     } catch (e) {
+      // Überholte Runde: nur die eigenen Listener abräumen. Ein disconnect()
+      // würde hier die inzwischen gültige Verbindung zerstören.
+      if (stale()) { abandon(); return; }
       this.disconnect();
       this.statusBar.setStatus("error", String(e));
       new Notice(`Vaultbridge: Verbindung fehlgeschlagen: ${String(e)}`);
@@ -238,6 +269,10 @@ export default class VaultbridgePlugin extends Plugin {
   }
 
   disconnect(): void {
+    // Generation erhöhen, BEVOR die Verbindung fällt: eine noch laufende
+    // connect()-Runde erkennt daran, dass sie überholt ist, und schreibt sich
+    // nicht nachträglich in die gerade geräumten Felder.
+    this.connectGeneration++;
     this.stopSyncStack();
     this.bridge = null;
     void this.localDb?.close();
