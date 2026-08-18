@@ -40,13 +40,31 @@ export async function encodeFile(
   return { note, chunks };
 }
 
+/**
+ * Verschlüsselt NUR das Metadatenfeld. Für Änderungen, die den Inhalt gar
+ * nicht anfassen — vor allem die weiche Löschung, die einen eigenen
+ * Zeitstempel und ein eigenes Gerät bekommen muss, ohne die Chunks neu zu
+ * schreiben.
+ */
+export async function encodeMeta(keys: VaultKeys, meta: FileMeta): Promise<string> {
+  return encField(keys, utf8.encode(JSON.stringify(meta)));
+}
+
+/**
+ * Entschlüsselt NUR das Metadatenfeld — ohne die Chunks, die bei einer
+ * gelöschten Notiz per Definition fehlen.
+ */
+export async function decodeMeta(keys: VaultKeys, note: NoteDoc): Promise<FileMeta> {
+  return JSON.parse(utf8.decode(await decField(keys, note.meta_enc))) as FileMeta;
+}
+
 export async function decodeFile(
   keys: VaultKeys,
   note: NoteDoc,
   getChunk: (id: string) => Promise<ChunkDoc>,
 ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta }> {
   const path = utf8.decode(await decField(keys, note.path_enc));
-  const meta = JSON.parse(utf8.decode(await decField(keys, note.meta_enc))) as FileMeta;
+  const meta = await decodeMeta(keys, note);
   const parts: Uint8Array[] = [];
   for (const id of note.chunks) {
     const chunk = await getChunk(id);

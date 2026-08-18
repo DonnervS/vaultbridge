@@ -44,9 +44,11 @@ export class ConflictListView extends ItemView {
       return;
     }
 
-    // Sammel-Auflösung für die häufigen „unechten“ Konflikte (identischer Inhalt,
-    // nur divergierende Revisionen) — spart das Einzeln-Durchklicken.
-    const resolveBtn = root.createEl("button", { cls: "vb-cv-resolve-all", text: "Identische auflösen" });
+    // Sammel-Auflösung, ohne auf den nächsten Sync-Settle zu warten: identische
+    // Zweige werden still verworfen, bei echten Abweichungen gewinnt die neuere
+    // Fassung (die unterlegene landet als Sidecar im Vault) — spart das
+    // Einzeln-Durchklicken.
+    const resolveBtn = root.createEl("button", { cls: "vb-cv-resolve-all", text: "Konflikte jetzt auflösen" });
     resolveBtn.onclick = () => this.onResolveIdentical();
 
     const activeId = this.getActiveId();
@@ -62,6 +64,12 @@ export class ConflictListView extends ItemView {
         item.createDiv({ cls: "vb-cv-item-dir", text: path.slice(0, slash + 1) });
       }
       item.createDiv({ cls: "vb-cv-item-name", text: slash >= 0 ? path.slice(slash + 1) : path });
+      if (conflict) {
+        const names = [conflict.local, ...conflict.remotes].map((v) =>
+          v.meta.device ? v.meta.device : "unbekannt",
+        );
+        item.createDiv({ cls: "vb-cv-item-devices", text: names.join(" ↔ ") });
+      }
       item.onclick = () => this.onPick(id);
     }
   }

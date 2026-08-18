@@ -1,5 +1,5 @@
 import { VaultKeys, pathId } from "../crypto/crypto";
-import { encodeFile, decodeFile } from "./transform";
+import { encodeFile, decodeFile, encodeMeta, decodeMeta } from "./transform";
 import { NoteDoc, ChunkDoc, FileMeta } from "./model";
 import { contentHash } from "../vault/applyChange";
 import { MARKER_ID, EpochMarker } from "../crypto/rotation";
@@ -15,6 +15,9 @@ export interface ConflictVersion {
   rev: string;
   bytes: Uint8Array;
   meta: FileMeta;
+  /** Ist dieser Zweig eine Löschung? Zwei Zweige mit gleichem (leeren) Inhalt,
+   *  aber unterschiedlichem Flag sind NICHT dasselbe. */
+  deleted: boolean;
 }
 
 export interface FileRevision {
@@ -92,10 +95,49 @@ export class VaultStore {
     return decoded ? { bytes: decoded.bytes, meta: decoded.meta } : null;
   }
 
-  async deleteFile(path: string): Promise<void> {
+  /**
+   * Entschlüsselt NUR die Metadaten einer Notiz und meldet mit, welcher
+   * Schlüssel des Rings dafür gepasst hat. Nötig für das Umschreiben der
+   * Metadaten an Ort und Stelle (deleteFile): der Rest des Dokuments — vor
+   * allem path_enc — bleibt mit dem alten Schlüssel verschlüsselt, das neue
+   * meta_enc muss deshalb mit DEMSELBEN Schlüssel entstehen. Sonst wäre das
+   * Dokument mit keinem Schlüssel mehr als Ganzes lesbar.
+   */
+  private async tryDecodeMeta(note: NoteDoc): Promise<{ meta: FileMeta; keys: VaultKeys } | null> {
+    for (const k of this.keyring) {
+      try {
+        return { meta: await decodeMeta(k, note), keys: k };
+      } catch {
+        /* falscher Schlüssel -> nächster Kandidat */
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Weiche Löschung: das Dokument bleibt bestehen und wird als gelöscht
+   * markiert (deleted, keine Chunks). Die Metadaten werden dabei NEU
+   * geschrieben — mit dem Zeitpunkt dieser Löschung und dem löschenden Gerät.
+   *
+   * Ohne das erbte die Löschung Zeitstempel und Gerät der letzten INHALTS-
+   * änderung: „der neuere gewinnt" entschiede dann anhand eines fremden,
+   * früheren Schreibvorgangs, und die Konfliktansicht schriebe die Löschung
+   * dem falschen Gerät zu.
+   */
+  async deleteFile(path: string, device: string): Promise<void> {
     const id = await pathId(this.keys.idKey, path);
     const note = await this.getRaw<NoteDoc>(id);
     if (!note) return;
+    const decoded = await this.tryDecodeMeta(note);
+    // Nicht entschlüsselbar (fremder Schlüssel): dann bleiben die alten
+    // Metadaten stehen. Die Löschung selbst ist wichtiger als ihre Zuordnung.
+    if (decoded) {
+      note.meta_enc = await encodeMeta(decoded.keys, {
+        ...decoded.meta,
+        device,
+        changedAt: Date.now(),
+      });
+    }
     note.deleted = true;
     note.chunks = [];
     await this.db.put(note);
@@ -131,10 +173,11 @@ export class VaultStore {
   async readNoteRev(
     id: string,
     rev: string,
-  ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta } | null> {
+  ): Promise<{ path: string; bytes: Uint8Array; meta: FileMeta; deleted: boolean } | null> {
     try {
       const note = await this.db.get<NoteDoc>(id, { rev });
-      return await this.tryDecode(note);
+      const decoded = await this.tryDecode(note);
+      return decoded ? { ...decoded, deleted: !!note.deleted } : null;
     } catch {
       return null;
     }
@@ -182,13 +225,13 @@ export class VaultStore {
     const remotes: ConflictVersion[] = [];
     for (const rev of winning._conflicts) {
       const version = await this.readNoteRev(id, rev);
-      if (version) remotes.push({ rev, bytes: version.bytes, meta: version.meta });
+      if (version) remotes.push({ rev, bytes: version.bytes, meta: version.meta, deleted: version.deleted });
     }
     return {
       id,
       path: local.path,
       isBinary: local.meta.isBinary,
-      local: { rev: winning._rev, bytes: local.bytes, meta: local.meta },
+      local: { rev: winning._rev, bytes: local.bytes, meta: local.meta, deleted: !!winning.deleted },
       remotes,
     };
   }
@@ -205,18 +248,84 @@ export class VaultStore {
     await this.writeChunks(chunks);
     if (winning) note._rev = winning._rev;
     await this.db.put(note);
-    let pruneError: unknown = null;
-    for (const rev of pruneRevs) {
+    await this.removeTolerant(id, pruneRevs);
+  }
+
+  /**
+   * Löst einen Konflikt zugunsten eines GELÖSCHTEN Zweiges auf: schreibt eine
+   * neue Revision, die weiterhin gelöscht ist (deleted, keine Chunks), und
+   * verwirft die unterlegenen Zweige.
+   *
+   * Ohne diesen Weg käme eine gewinnende Löschung als leere Datei zurück:
+   * resolveConflict() baut sein Dokument über encodeFile(), und das setzt
+   * `deleted` nie. Ob der Fall überhaupt eintritt, hängt allein davon ab,
+   * welchen Zweig CouchDB zum Gewinner gewählt hat — ist es der gelöschte,
+   * genügt pruneConflictRevs(), sonst muss hier geschrieben werden. Dieselbe
+   * Nutzeraktion darf nicht je nach dieser Wahl anders ausgehen.
+   *
+   * `meta` sind die Metadaten des gewinnenden (gelöschten) Zweiges und werden
+   * unverändert übernommen: die neue Revision soll genau diesen Zweig
+   * darstellen, samt löschendem Gerät und Löschzeitpunkt.
+   */
+  async resolveConflictAsDeleted(
+    id: string,
+    path: string,
+    meta: FileMeta,
+    pruneRevs: string[],
+  ): Promise<void> {
+    const winning = await this.getRaw<NoteDoc>(id);
+    // encodeFile mit leeren Bytes erzeugt keine Chunks — genau das, was eine
+    // Löschung braucht. `deleted` kennt encodeFile nicht; das wird hier gesetzt.
+    const { note } = await encodeFile(this.keys, path, new Uint8Array(0), meta, this.chunkSize);
+    note.deleted = true;
+    if (winning) note._rev = winning._rev;
+    await this.db.put(note);
+    await this.removeTolerant(id, pruneRevs);
+  }
+
+  /**
+   * Verwirft Konfliktzweige, OHNE eine neue Revision zu schreiben. Für den Fall,
+   * dass die Zweige inhaltsgleich sind — dann ist Neuschreiben nicht nur
+   * überflüssig, sondern schädlich: zwei Geräte, die gleichzeitig auflösen,
+   * erzeugen damit sofort den nächsten Konflikt.
+   */
+  async pruneConflictRevs(id: string, revs: string[]): Promise<void> {
+    await this.removeTolerant(id, revs);
+  }
+
+  /**
+   * Entfernt eine Liste bekannter Konfliktzweig-Revisionen und toleriert dabei
+   * "ist schon weg". Gemeinsam genutzt von `resolveConflict` (Prune nach dem
+   * Merge-Schreiben) und `pruneConflictRevs` (Prune ohne jedes Schreiben) —
+   * beide räumen ausschließlich Revisionen auf, die der Aufrufer bereits aus
+   * `_conflicts` gelesen hat, nie beliebige Dokument-Updates.
+   *
+   * Zwei Fehlerarten gelten deshalb als Erfolg:
+   * - 404/"not_found": die Revision existiert nicht mehr (kompaktiert oder
+   *   von einem anderen Gerät bereits entfernt).
+   * - 409/"conflict": `rev` ist nicht mehr die Spitze seines Zweigs, weil der
+   *   Zweig bereits entfernt (oder erneut fortgeschrieben) wurde. Praktisch
+   *   bedeutet das hier fast immer "schon erledigt". Im seltenen Fall, dass
+   *   der Zweig zwischenzeitlich mit neuem Inhalt fortgeschrieben wurde,
+   *   bleibt er weiterhin in `_conflicts` sichtbar und wird beim nächsten
+   *   Durchlauf erneut behandelt — es geht nichts verloren.
+   *
+   * Alle übrigen Fehler: der erste wird gemerkt und nach der Schleife
+   * geworfen (Rest der Liste wird trotzdem versucht — best effort).
+   */
+  private async removeTolerant(id: string, revs: string[]): Promise<void> {
+    let firstError: unknown = null;
+    for (const rev of revs) {
       try {
         await this.db.remove(id, rev);
       } catch (e) {
         const status = (e as { status?: number }).status;
         const name = (e as { name?: string }).name;
-        if (status === 404 || name === "not_found") continue; // bereits entfernt -> ok
-        pruneError = pruneError ?? e;
+        if (status === 404 || name === "not_found" || status === 409 || name === "conflict") continue;
+        firstError = firstError ?? e;
       }
     }
-    if (pruneError) throw toError(pruneError);
+    if (firstError) throw toError(firstError);
   }
 
   async pathHashes(): Promise<Map<string, string>> {

@@ -2,6 +2,8 @@ import { App, Modal, Notice, Setting } from "obsidian";
 import QRCode from "qrcode";
 import { encodeSetup, SetupPayload } from "../setup/setupString";
 import { bytesToBase64url } from "../crypto/encoding";
+import { checkCouchUrl } from "../setup/couchUrl";
+import { testConnection } from "../setup/connection";
 
 const KDF_ITERATIONS = 210000;
 const CHUNK_SIZE = 100000;
@@ -22,6 +24,7 @@ export class GeneratorModal extends Modal {
   private gzip = true;
 
   private outputEl!: HTMLElement;
+  private urlHintsEl!: HTMLElement;
 
   /**
    * @param onApply Optional: wird der Generator aus den Plugin-Einstellungen (oder
@@ -47,9 +50,17 @@ export class GeneratorModal extends Modal {
 
     new Setting(contentEl)
       .setName("CouchDB-URL")
+      .setDesc(
+        "Nur die Server-Wurzel — z. B. https://couch.example.com oder http://192.168.20.30:5984. " +
+          "Ohne Datenbanknamen, ohne /_utils und ohne abschließenden Schrägstrich.",
+      )
       .addText((t) =>
-        t.setPlaceholder("https://couch.example.com").onChange((v) => (this.couchUrl = v.trim())),
+        t.setPlaceholder("http://192.168.20.30:5984").onChange((v) => {
+          this.couchUrl = v.trim();
+          this.renderUrlHints();
+        }),
       );
+    this.urlHintsEl = contentEl.createDiv({ cls: "vb-url-hints" });
 
     new Setting(contentEl)
       .setName("Datenbankname")
@@ -85,6 +96,14 @@ export class GeneratorModal extends Modal {
       .setDesc("Inhalte vor der Verschlüsselung komprimieren.")
       .addToggle((tg) => tg.setValue(this.gzip).onChange((v) => (this.gzip = v)));
 
+    const testResultEl = contentEl.createDiv({ cls: "vb-url-hint" });
+    new Setting(contentEl)
+      .setName("Verbindung testen")
+      .setDesc("Prüft Erreichbarkeit, Zugangsdaten und Datenbank — vor dem Erzeugen des Setup-Strings.")
+      .addButton((b) =>
+        b.setButtonText("Verbindung testen").onClick(() => void this.runConnectionTest(testResultEl)),
+      );
+
     new Setting(contentEl).addButton((b) =>
       b
         .setButtonText("Erzeugen")
@@ -95,9 +114,51 @@ export class GeneratorModal extends Modal {
     this.outputEl = contentEl.createDiv();
   }
 
+  /** Live-Rückmeldung zur eingetippten URL. */
+  private renderUrlHints(): void {
+    const el = this.urlHintsEl;
+    el.empty();
+    const { hints, normalized } = checkCouchUrl(this.couchUrl);
+    for (const hint of hints) {
+      el.createDiv({ cls: `vb-url-hint vb-lvl-${hint.level}`, text: hint.message });
+    }
+    // Nur melden, wenn die Normalisierung wirklich etwas ändert.
+    if (normalized && normalized !== this.couchUrl) {
+      el.createDiv({ cls: "vb-url-hint vb-lvl-ok", text: `Verwendet wird: ${normalized}` });
+    }
+  }
+
+  /** Prüft Erreichbarkeit, Zugangsdaten und Datenbank, bevor der String entsteht. */
+  private async runConnectionTest(resultEl: HTMLElement): Promise<void> {
+    if (!this.couchUrl || !this.db || !this.user || !this.pass) {
+      resultEl.setText("Bitte zuerst URL, Datenbank, Benutzer und Passwort ausfüllen.");
+      return;
+    }
+    resultEl.setText("Test läuft …");
+    const { normalized } = checkCouchUrl(this.couchUrl);
+    const result = await testConnection({
+      couchUrl: normalized || this.couchUrl,
+      db: this.db,
+      user: this.user,
+      pass: this.pass,
+    });
+    resultEl.setText(`${result.ok ? "✅" : "❌"} ${result.message}`);
+  }
+
   private async generate(): Promise<void> {
     if (!this.couchUrl || !this.db || !this.user || !this.pass) {
       new Notice("Bitte alle Pflichtfelder ausfüllen.");
+      return;
+    }
+
+    // Bei einem als Fehler markierten URL-Eingabewert keinen String erzeugen — sonst landet
+    // genau die kaputte URL im vbridge1:-String, und der Fehler taucht erst auf dem
+    // Empfängergerät als fehlgeschlagene Verbindung wieder auf. Warn-Hinweise (lokale
+    // Adresse, fehlender Port, unverschlüsseltes http im eigenen Netz) blockieren nicht.
+    const { hints, normalized } = checkCouchUrl(this.couchUrl);
+    const errorHint = hints.find((h) => h.level === "error");
+    if (errorHint) {
+      new Notice(`CouchDB-URL: ${errorHint.message}`);
       return;
     }
 
@@ -105,7 +166,7 @@ export class GeneratorModal extends Modal {
     const embedded = this.passphrase.trim().length > 0;
     const payload: SetupPayload = {
       v: 1,
-      couchUrl: this.couchUrl,
+      couchUrl: normalized || this.couchUrl,
       db: this.db,
       user: this.user,
       pass: this.pass,

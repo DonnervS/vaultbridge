@@ -5,6 +5,7 @@ import { FileMeta } from "../store/model";
 import { SyncRules, shouldSync, isHidden, folderIsExcluded } from "./rules";
 import { listAllFiles } from "./adapterScan";
 import { planHiddenSync } from "./hiddenSync";
+import { uploadIfChanged } from "../store/initialSync";
 
 // Sentinel-"Hash" für Löschungen: der Echo-Guard arbeitet sonst mit Inhalts-
 // Hashes; eine Löschung hat keinen Inhalt, daher ein fester, kollisionsfreier Wert.
@@ -26,13 +27,34 @@ export class VaultBridge {
   // und Notizen, deren Chunks beim Pull noch fehlten, in einer späteren Runde
   // nachgezogen werden. Laufende Updates übernimmt der Live-Feed (subscribe).
   private materialized = new Set<string>();
-  private reconcileFromStoreRunning = false;
+  // Serialisiert reconcileFromStore(): höchstens EIN Durchlauf läuft, höchstens
+  // EINER wartet (mehr wird nicht angehängt — die Kette bleibt beschränkt).
+  // Wer während eines Durchlaufs aufruft, wird nicht mehr verworfen, sondern
+  // bekommt einen Nachlauf, der garantiert NACH seinem Aufruf beginnt: der
+  // laufende Durchlauf hat seine IDs womöglich gelesen, bevor die gerade
+  // replizierten Notizen im Store lagen, und wäre für den Aufrufer kein Beleg.
+  private reconcileFromStoreRunning: Promise<void> | null = null;
+  private reconcileFromStorePending: Promise<void> | null = null;
   private keyMismatchNotified = false;
   // Gestoppt heißt: diese Bridge darf nicht mehr in den Store schreiben. Nötig,
   // weil stop() die Listener sofort abmeldet, ein BEREITS LAUFENDER Schreibvorgang
   // aber noch in seinem await auf readBinary hängt und danach in eine gerade
   // geschlossene PouchDB schreiben würde ("connection is closing").
   private stopped = false;
+  // Zählt die stop()-Aufrufe. Ein Aufrufer, der über ein await hinweg wissen
+  // muss, ob die Bridge durchgehend gelaufen ist, merkt sich den Wert vorher
+  // und vergleicht danach — das erkennt auch ein stop()/start()-Paar
+  // (restartSync()), nach dem `stopped` sofort wieder false ist.
+  private stops = 0;
+  // Der Erst-Upload (reconcileExisting/reconcileHidden) ist gesperrt, bis der
+  // Erst-Pull durch ist — sonst vergleicht er gegen einen leeren Store, lädt
+  // alles hoch und der nachfolgende Pull macht daraus auf JEDER Datei einen
+  // Konflikt. Freigegeben von runInitialUpload().
+  private initialUploadDone = false;
+  // Löschungen während des Erst-Pulls: reconcileExisting() sieht nur, was da
+  // IST, kann also nichts über inzwischen gelöschte Dateien aussagen. Deshalb
+  // gepuffert und nach der Freigabe nachgeholt.
+  private queuedDeletes = new Set<string>();
 
   constructor(
     private readonly app: App,
@@ -45,6 +67,7 @@ export class VaultBridge {
     private readonly configDir: string,
     private readonly getKnown: () => Map<string, string>,
     private readonly setKnown: (m: Map<string, string>) => void,
+    private readonly getDeviceName: () => string,
     private readonly onApplied?: (path: string) => void,
   ) {}
 
@@ -72,6 +95,10 @@ export class VaultBridge {
       try {
         if (this.stopped) return;
         if (!shouldSync(file.path, this.rules, this.configDir)) return;
+        // Während des Erst-Pulls nicht hochladen. reconcileExisting() holt
+        // jede vorhandene Datei danach ohnehin nach, inklusive der hier
+        // übergangenen Änderung.
+        if (!this.initialUploadDone) return;
         const bytes = new Uint8Array(await vault.readBinary(file));
         if (this.stopped) return; // während des Lesens getrennt -> nicht mehr schreiben
         if (this.guard.isEcho(file.path, await contentHash(bytes))) return; // eigene Remote-Schreibung
@@ -85,8 +112,9 @@ export class VaultBridge {
       try {
         if (this.stopped) return;
         if (!shouldSync(file.path, this.rules, this.configDir)) return;
+        if (!this.initialUploadDone) { this.queuedDeletes.add(file.path); return; }
         if (this.guard.isEcho(file.path, DELETE_SENTINEL)) return; // eigene Remote-Löschung
-        await this.store.deleteFile(file.path);
+        await this.store.deleteFile(file.path, this.getDeviceName());
       } catch (e) {
         new Notice(`Vaultbridge: Löschfehler bei ${file.path}: ${String(e)}`);
       }
@@ -104,9 +132,52 @@ export class VaultBridge {
     // Eingehende Remote-Änderungen anwenden.
     this.incoming = this.store.subscribe((id) => void this.applyRemote(id));
 
-    // Bestehende Dateien initial hochladen (Obsidian feuert für vorhandene
-    // Dateien kein create-Event).
-    void this.reconcileExisting();
+    // Kein Erst-Upload hier: der läuft erst nach dem Erst-Pull über
+    // runInitialUpload(). Die Vault-Listener oben sind trotzdem sofort aktiv,
+    // damit während des Pulls nichts unbemerkt bleibt.
+  }
+
+  /**
+   * Gibt den Erst-Upload frei und führt ihn aus. Wird von main.ts erst
+   * aufgerufen, wenn der Erst-Pull gegen diese Datenbank abgeschlossen ist —
+   * ab dann hat reconcileExisting() einen gefüllten Store zum Vergleichen und
+   * lädt nur noch echte Abweichungen hoch. Idempotent.
+   *
+   * Wird die Bridge währenddessen gestoppt (stop()), bricht der Lauf ab,
+   * sobald das bemerkt wird: bereits abgearbeitete Löschungen sind aus
+   * queuedDeletes entfernt, der Rest bleibt für einen späteren Lauf erhalten,
+   * reconcileHidden() entfällt für diesen Durchlauf, und initialUploadDone
+   * wird zurückgesetzt — sonst würde der Guard am Anfang dieser Methode einen
+   * späteren Aufruf auf derselben Instanz (z.B. nach restartSync()) blockieren,
+   * obwohl der Lauf nie fertig wurde.
+   */
+  async runInitialUpload(): Promise<void> {
+    if (this.initialUploadDone) return;
+    this.initialUploadDone = true;
+    await this.reconcileExisting();
+    for (const path of this.queuedDeletes) {
+      // Gestoppt -> ab hier nicht mehr in den (evtl. schon geschlossenen)
+      // Store schreiben. Rest der Warteschlange bleibt für einen späteren
+      // Lauf erhalten, nicht verwerfen.
+      if (this.stopped) { this.initialUploadDone = false; return; }
+      // Nur löschen, was auch wirklich weg ist — eine Datei kann während des
+      // Pulls gelöscht und wieder angelegt worden sein.
+      if (!this.app.vault.getAbstractFileByPath(path)) {
+        try {
+          // deleteFile() stempelt mit Date.now() — hier der Moment des
+          // Nachholens (nach dem Erst-Pull), nicht der ursprünglichen
+          // Löschung. Eine spät erkannte Löschung kann dadurch eine wirklich
+          // neuere Remote-Bearbeitung bei "newest wins" überstimmen; die
+          // unterlegene Fassung bleibt aber als Sidecar erhalten.
+          await this.store.deleteFile(path, this.getDeviceName());
+        } catch (e) {
+          new Notice(`Vaultbridge: Löschung konnte nicht nachgeholt werden (${path}): ${String(e)}`);
+        }
+      }
+      this.queuedDeletes.delete(path);
+    }
+    if (this.stopped) { this.initialUploadDone = false; return; }
+    await this.reconcileHidden();
   }
 
   private metaOf(file: TFile): FileMeta {
@@ -116,20 +187,19 @@ export class VaultBridge {
       size: file.stat.size,
       mime: "",
       isBinary: !/^(md|txt|json|css|ya?ml)$/i.test(file.extension),
+      device: this.getDeviceName(),
+      changedAt: Date.now(),
     };
   }
 
   private async reconcileExisting(): Promise<void> {
+    if (!this.initialUploadDone) return; // Erst-Pull noch nicht abgeschlossen
     for (const file of this.app.vault.getFiles()) {
       if (this.stopped) return; // getrennt -> laufenden Abgleich abbrechen
       try {
         if (!shouldSync(file.path, this.rules, this.configDir)) continue;
         const bytes = new Uint8Array(await this.app.vault.readBinary(file));
-        const existing = await this.store.getFile(file.path);
-        if (existing && (await contentHash(existing.bytes)) === (await contentHash(bytes))) {
-          continue; // unverändert -> kein erneuter Upload (idempotent, kein Churn)
-        }
-        await this.store.putFile(file.path, bytes, this.metaOf(file));
+        await uploadIfChanged(this.store, file.path, bytes, this.metaOf(file));
       } catch (e) {
         new Notice(`Vaultbridge: Erst-Abgleich fehlgeschlagen bei ${file.path}: ${String(e)}`);
       }
@@ -144,59 +214,97 @@ export class VaultBridge {
    * abgeschlossen war — erzeugen keinen neuen Change und würden ohne diesen
    * Nachlauf nie zu Dateien. Idempotent: applyRemote schreibt nur bei
    * Hash-Unterschied, überspringt bereits identische Dateien.
+   *
+   * Aufrufe überlappen sich (Sync-Settles, Erst-Pull, Nach-Pull). Sie laufen
+   * deshalb nacheinander: läuft schon einer, hängt sich der Aufrufer an einen
+   * einzigen Nachlauf an. Wenn dieses Promise erfüllt ist, ist mit Sicherheit
+   * ein Durchlauf fertig, der NACH dem Aufruf begonnen hat — worauf sich
+   * catchUpInitialPull() verlässt, bevor es den Erst-Upload freigibt.
    */
   async reconcileFromStore(): Promise<void> {
-    if (this.reconcileFromStoreRunning) return; // Überlappung bei schnellen Settles vermeiden
-    this.reconcileFromStoreRunning = true;
+    // BEIDE Riegel prüfen, nicht nur den laufenden Durchlauf. Sonst gibt es ein
+    // Fenster, in dem der Vorlauf schon fertig ist (running === null) und der
+    // Nachlauf noch nicht angelaufen (pending !== null): ein Aufrufer in diesem
+    // Fenster startete einen eigenen Durchlauf, den der Nachlauf anschließend
+    // als „genügt mir auch" übernähme — und ein SPÄTERER Aufrufer bekäme damit
+    // ein Promise, dessen Durchlauf vor seinem Aufruf begonnen hat. Genau darauf
+    // verlässt sich catchUpInitialPull(), bevor es den Erst-Upload freigibt.
+    if (!this.reconcileFromStoreRunning && !this.reconcileFromStorePending) {
+      await this.startReconcileFromStore();
+      return;
+    }
+    if (!this.reconcileFromStorePending) {
+      const previous = this.reconcileFromStoreRunning;
+      this.reconcileFromStorePending = (async () => {
+        await previous?.catch(() => undefined); // Fehler gehören dem Vorlauf
+        this.reconcileFromStorePending = null;
+        // Hat inzwischen jemand anders einen Durchlauf gestartet? Der ist
+        // ebenfalls nach dieser Anforderung losgelaufen und genügt ihr.
+        // (Mit dem Riegel oben kann das nicht mehr vorkommen — die Prüfung
+        // bleibt als Absicherung stehen, falls der Riegel je fällt.)
+        const current = this.reconcileFromStoreRunning;
+        if (current) { await current.catch(() => undefined); return; }
+        await this.startReconcileFromStore();
+      })();
+    }
+    await this.reconcileFromStorePending;
+  }
+
+  private startReconcileFromStore(): Promise<void> {
+    const run = this.materializeFromStore().finally(() => {
+      this.reconcileFromStoreRunning = null;
+    });
+    this.reconcileFromStoreRunning = run;
+    return run;
+  }
+
+  /** Ein einzelner Durchlauf; die Serialisierung macht reconcileFromStore(). */
+  private async materializeFromStore(): Promise<void> {
+    let ids: string[];
     try {
-      let ids: string[];
+      ids = await this.store.listNoteIds();
+    } catch (e) {
+      new Notice(`Vaultbridge: Store→Vault-Abgleich fehlgeschlagen: ${String(e)}`);
+      return;
+    }
+    // Nur noch nicht materialisierte IDs betrachten -> nach dem ersten
+    // vollständigen Durchlauf ist der Abgleich billig (nur Set-Differenz).
+    const pending = ids.filter((id) => !this.materialized.has(id));
+    if (pending.length === 0) return;
+
+    let materializedThisRound = 0;
+    for (const id of pending) {
+      if (this.stopped) return; // getrennt -> laufenden Abgleich abbrechen
+      // Probe-Entschlüsselung: Ist die Notiz (noch) nicht dekodierbar — etwa
+      // weil ihre Chunks beim laufenden Pull noch nicht angekommen sind (die
+      // Replikation garantiert keine Reihenfolge zwischen n:-Doc und h:-Chunks)
+      // — NICHT als erledigt markieren und in einer späteren Runde (nächster
+      // Settle, dann sind die Chunks da) erneut versuchen. Genau dieser Fall
+      // ließ auf Mobile nur einen Bruchteil der Dateien erscheinen.
+      let decodable = false;
       try {
-        ids = await this.store.listNoteIds();
-      } catch (e) {
-        new Notice(`Vaultbridge: Store→Vault-Abgleich fehlgeschlagen: ${String(e)}`);
-        return;
+        decodable = (await this.store.readNote(id)) !== null;
+      } catch {
+        decodable = false;
       }
-      // Nur noch nicht materialisierte IDs betrachten -> nach dem ersten
-      // vollständigen Durchlauf ist der Abgleich billig (nur Set-Differenz).
-      const pending = ids.filter((id) => !this.materialized.has(id));
-      if (pending.length === 0) return;
+      if (!decodable) continue;
+      await this.applyRemote(id);
+      this.materialized.add(id);
+      materializedThisRound++;
+    }
 
-      let materializedThisRound = 0;
-      for (const id of pending) {
-        if (this.stopped) return; // getrennt -> laufenden Abgleich abbrechen
-        // Probe-Entschlüsselung: Ist die Notiz (noch) nicht dekodierbar — etwa
-        // weil ihre Chunks beim laufenden Pull noch nicht angekommen sind (die
-        // Replikation garantiert keine Reihenfolge zwischen n:-Doc und h:-Chunks)
-        // — NICHT als erledigt markieren und in einer späteren Runde (nächster
-        // Settle, dann sind die Chunks da) erneut versuchen. Genau dieser Fall
-        // ließ auf Mobile nur einen Bruchteil der Dateien erscheinen.
-        let decodable = false;
-        try {
-          decodable = (await this.store.readNote(id)) !== null;
-        } catch {
-          decodable = false;
-        }
-        if (!decodable) continue;
-        await this.applyRemote(id);
-        this.materialized.add(id);
-        materializedThisRound++;
-      }
-
-      // Schlüssel-Mismatch: es liegen Notizen an, aber es ließ sich (bislang)
-      // keine einzige entschlüsseln -> Setup-String/Passphrase passt nicht zu
-      // diesen Daten. Der Selbsttest merkt das nicht, weil er nur den LOKALEN
-      // Krypto-Roundtrip prüft. Nur EINMAL melden, nicht bei jedem Settle.
-      if (this.materialized.size === 0 && materializedThisRound === 0 && !this.keyMismatchNotified) {
-        this.keyMismatchNotified = true;
-        new Notice(
-          "Vaultbridge: Es liegen synchronisierte Daten vor, aber keine ließ sich entschlüsseln. " +
-            "Passphrase/Setup-String passt nicht zu diesen Daten — auf allen Geräten muss derselbe " +
-            "Setup-String verwendet werden.",
-          15000,
-        );
-      }
-    } finally {
-      this.reconcileFromStoreRunning = false;
+    // Schlüssel-Mismatch: es liegen Notizen an, aber es ließ sich (bislang)
+    // keine einzige entschlüsseln -> Setup-String/Passphrase passt nicht zu
+    // diesen Daten. Der Selbsttest merkt das nicht, weil er nur den LOKALEN
+    // Krypto-Roundtrip prüft. Nur EINMAL melden, nicht bei jedem Settle.
+    if (this.materialized.size === 0 && materializedThisRound === 0 && !this.keyMismatchNotified) {
+      this.keyMismatchNotified = true;
+      new Notice(
+        "Vaultbridge: Es liegen synchronisierte Daten vor, aber keine ließ sich entschlüsseln. " +
+          "Passphrase/Setup-String passt nicht zu diesen Daten — auf allen Geräten muss derselbe " +
+          "Setup-String verwendet werden.",
+        15000,
+      );
     }
   }
 
@@ -317,6 +425,7 @@ export class VaultBridge {
    */
   async reconcileHidden(): Promise<void> {
     if (this.stopped) return;
+    if (!this.initialUploadDone) return; // Erst-Pull noch nicht abgeschlossen
     if (this.reconcileRunning) return;
     this.reconcileRunning = true;
     try {
@@ -369,11 +478,19 @@ export class VaultBridge {
           await this.store.putFile(path, bytes, {
             mtime: 0, ctime: 0, size: bytes.length, mime: "",
             isBinary: !/\.(md|txt|json|css|ya?ml|js)$/i.test(path),
+            device: this.getDeviceName(),
+            changedAt: Date.now(),
           });
         }
         for (const path of plan.deleteRemotes) {
           if (this.pendingHiddenDeletes.has(path)) {
-            await this.store.deleteFile(path);
+            // deleteFile() stempelt mit Date.now() — hier der Moment der
+            // BESTÄTIGUNG (eine Runde nach der Erkennung, bewusst verzögert),
+            // nicht der ursprünglichen Löschung. Eine spät erkannte Löschung
+            // kann dadurch eine wirklich neuere Remote-Bearbeitung bei
+            // "newest wins" überstimmen; die unterlegene Fassung bleibt aber
+            // als Sidecar erhalten.
+            await this.store.deleteFile(path, this.getDeviceName());
             this.pendingHiddenDeletes.delete(path);
           } else {
             this.pendingHiddenDeletes.add(path); // erst in der nächsten Runde löschen
@@ -399,8 +516,23 @@ export class VaultBridge {
     }
   }
 
+  /** Ist diese Bridge gerade gestoppt? */
+  isStopped(): boolean {
+    return this.stopped;
+  }
+
+  /**
+   * Marke des aktuellen Lebenszyklus; steigt bei jedem stop(). Wer sich auf
+   * einen abgeschlossenen reconcileFromStore()-Durchlauf verlässt, braucht sie:
+   * ein Durchlauf, der wegen stop() vorzeitig ausstieg, meldet trotzdem Erfolg.
+   */
+  lifecycle(): number {
+    return this.stops;
+  }
+
   stop(): void {
     this.stopped = true; // zuerst: laufende Schreibvorgänge sollen sofort abbrechen
+    this.stops++;
     for (const off of this.handlers) off();
     this.handlers.length = 0;
     this.incoming?.cancel();

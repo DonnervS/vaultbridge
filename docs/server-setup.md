@@ -138,6 +138,17 @@ code). Run the connection self-test — if CORS or credentials are wrong, it wil
   `app://obsidian.md` (desktop) and `capacitor://localhost` (mobile) are in
   `cors/origins` and that `enable_cors` is `true`. Restart is not needed for config-API
   changes.
+- **Blocked on a local IP (Chrome 142+ / Local Network Access)** — if your CouchDB
+  runs on `192.168.…`, `10.…` or `localhost`, recent Obsidian versions (Chromium 142
+  and newer) require a user permission before any app may reach a local network
+  address. Obsidian has no UI for that prompt, so the request fails silently. This
+  **cannot be fixed on the server**: Local Network Access replaced the older
+  Private Network Access model, and the `Access-Control-Allow-Private-Network`
+  response header is no longer evaluated. In Vaultbridge's settings, switch
+  **"Verbindungsart"** (Connection method) to **"Obsidian (requestUrl)"** — that
+  routes replication through Obsidian's own HTTP layer, which is subject to
+  neither CORS nor Local Network Access. The built-in self-test checks both paths
+  and tells you which one works.
 - **401 Unauthorized** — wrong username/password.
 - **Database doesn't exist yet** — that's fine. Vaultbridge's self-test reports this as OK, and the database is created automatically on the first sync. You don't need to pre-create it (though the steps above do, which is also fine).
 - **Works on desktop but not mobile** — mobile requires a valid HTTPS certificate and

@@ -1,7 +1,8 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import type VaultbridgePlugin from "../main";
 import { decodeSetup } from "../setup/setupString";
 import { runSelfTest } from "../setup/selfTest";
+import { makeRequestUrlFetch } from "../store/obsidianFetch";
 import { promptPassphrase } from "./PassphrasePromptModal";
 import { GeneratorModal } from "./GeneratorModal";
 import { RotationModal } from "./RotationModal";
@@ -70,7 +71,11 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Gerätename")
-      .setDesc("Name dieses Geräts im Sync.")
+      .setDesc(
+        "Wird bei jeder Änderung mitgespeichert (verschlüsselt) und in der Konfliktansicht angezeigt, " +
+          "damit du siehst, auf welchem Gerät eine Abweichung entstanden ist. Beim ersten Verbinden " +
+          "automatisch vorbelegt.",
+      )
       .addText((t) =>
         t.setValue(this.plugin.settings.deviceName).onChange(async (value) => {
           this.plugin.settings.deviceName = value;
@@ -204,6 +209,34 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Verbindungsart")
+      .setDesc(
+        "Wie Vaultbridge die CouchDB anspricht. „Browser\" ist der Standard und überträgt laufend " +
+          "(Streaming). „Obsidian (requestUrl)\" leitet über Obsidians eigene HTTP-Schicht um.",
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ fetch: "Browser (Standard)", requestUrl: "Obsidian (requestUrl)" })
+          .setValue(this.plugin.settings.transport)
+          .onChange(async (value) => {
+            this.plugin.settings.transport = value as "fetch" | "requestUrl";
+            await this.plugin.saveSettings();
+            new Notice("Vaultbridge: wirkt beim nächsten Verbinden.");
+          }),
+      );
+
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Verbindung wird blockiert? Chrome 142 — die Grundlage aktueller Obsidian-Versionen — verlangt eine " +
+        "Berechtigung, bevor eine App auf Adressen im lokalen Netz zugreifen darf (192.168.…, 10.…, localhost). " +
+        "Obsidian hat für diese Abfrage keine Oberfläche, deshalb schlägt die Verbindung ohne Erklärung fehl. " +
+        "Am Server lässt sich das nicht beheben: der früher übliche Header Access-Control-Allow-Private-Network " +
+        "wird von Chrome 142 nicht mehr ausgewertet. Stell in diesem Fall die Verbindungsart auf " +
+        "„Obsidian (requestUrl)\" — damit läuft der Sync an dieser Sperre vorbei. Der Selbsttest prüft beide Wege.",
+    });
+
+    new Setting(containerEl)
       .setName("Sync-Modus")
       .addDropdown((d) =>
         d
@@ -259,13 +292,23 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       }
     }
     new Notice("Selbsttest läuft …");
-    const result = await runSelfTest(payload, passphrase);
-    const cryptoIcon = result.crypto.ok ? "✅" : "❌";
-    const connIcon = result.connection.ok ? "✅" : "❌";
-    new Notice(
-      `${cryptoIcon} Verschlüsselung: ${result.crypto.message}\n` +
-        `${connIcon} Verbindung: ${result.connection.message}`,
-      10000,
+    const result = await runSelfTest(
+      payload,
+      passphrase,
+      fetch,
+      makeRequestUrlFetch(requestUrl),
     );
+    const icon = (ok: boolean): string => (ok ? "✅" : "❌");
+    const lines = [
+      `${icon(result.crypto.ok)} Verschlüsselung: ${result.crypto.message}`,
+      `${icon(result.connection.ok)} Browser: ${result.connection.message}`,
+    ];
+    if (result.connectionRequestUrl) {
+      lines.push(`${icon(result.connectionRequestUrl.ok)} Obsidian (requestUrl): ${result.connectionRequestUrl.message}`);
+      if (!result.connection.ok && result.connectionRequestUrl.ok) {
+        lines.push("→ Stell die Verbindungsart auf „Obsidian (requestUrl)\" um.");
+      }
+    }
+    new Notice(lines.join("\n"), 15000);
   }
 }

@@ -34,7 +34,7 @@ describe("VaultStore", () => {
   it("löscht eine Datei (getFile -> null)", async () => {
     const store = await makeStore();
     await store.putFile("Notiz.md", utf8.encode("abc"), meta);
-    await store.deleteFile("Notiz.md");
+    await store.deleteFile("Notiz.md", "Laptop");
     expect(await store.getFile("Notiz.md")).toBeNull();
   });
 
@@ -67,7 +67,7 @@ describe("VaultStore", () => {
     const keys = await deriveKeys("pw", salt, 50000);
     const store = new VaultStore(createTestPouch(), keys, 4);
     await store.putFile("weg.md", utf8.encode("x"), meta);
-    await store.deleteFile("weg.md");
+    await store.deleteFile("weg.md", "Laptop");
     const id = await pathId(keys.idKey, "weg.md");
     const note = await store.readNote(id);
     expect(note!.deleted).toBe(true);
