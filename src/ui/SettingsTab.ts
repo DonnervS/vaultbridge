@@ -147,6 +147,9 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
       aktion({
         name: "Selbsttest",
         desc: "Prüft Verschlüsselung und CouchDB-Verbindung.",
+        // Ab 1.13 ist der Zeilenname die Beschriftung; die bisherige Formulierung
+        // bleibt über die Suche auffindbar, ohne angezeigten Text zu ändern.
+        aliases: ["Selbsttest ausführen"],
         buttonText: "Selbsttest ausführen",
         cta: true,
         action: () => {
@@ -344,16 +347,25 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
   // ---------------------------------------------------------------------------
   // Alt-Pfad: Interpreter über dieselben Definitionen.
   // ---------------------------------------------------------------------------
+  /**
+   * Rückfallweg für Obsidian < 1.13 — genau die Rolle, die die Typings dieser
+   * Methode zuweisen: "Not called when getSettingDefinitions returns a non-empty
+   * array; the tab is rendered declaratively from those definitions instead.
+   * Only implement display() as a fallback for plugins that need to support
+   * Obsidian versions older than 1.13.0."
+   *
+   * Der Host garantiert also selbst, dass nur ein Renderer läuft; eine eigene
+   * Versionsabfrage ist überflüssig und wäre schädlich. Ruft ein Host display()
+   * doch auf, hat er sich damit gegen das deklarative Zeichnen entschieden — ein
+   * vorzeitiges return liefe dann auf einen leeren Einstellungs-Tab hinaus.
+   * zeichneAlles() beginnt mit containerEl.empty() und ist deshalb auch bei einem
+   * zusätzlichen Aufruf unschädlich: es entsteht eine vollständige Oberfläche.
+   */
   display(): void {
-    // Ab Obsidian 1.13 zeichnet der Host die Oberfläche selbst aus
-    // getSettingDefinitions(). Laut Typings ruft er display() dann gar nicht
-    // mehr auf — zugesichert ist das aber nicht, deshalb hier der Riegel: es
-    // soll immer nur genau ein Renderer laufen.
-    if (requireApiVersion("1.13.0")) return;
     this.zeichneAlles();
   }
 
-  /** Zeichnet den gesamten Tab aus den Definitionen (nur Obsidian < 1.13). */
+  /** Zeichnet den gesamten Tab aus den Definitionen (Rückfallweg, Obsidian < 1.13). */
   private zeichneAlles(): void {
     const { containerEl } = this;
     containerEl.empty();
