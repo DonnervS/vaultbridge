@@ -2,6 +2,7 @@ import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import type VaultbridgePlugin from "../main";
 import { decodeSetup } from "../setup/setupString";
 import { runSelfTest } from "../setup/selfTest";
+import { browserFetch } from "../setup/browserFetch";
 import { makeRequestUrlFetch } from "../store/obsidianFetch";
 import { promptPassphrase } from "./PassphrasePromptModal";
 import { GeneratorModal } from "./GeneratorModal";
@@ -295,7 +296,10 @@ export class VaultbridgeSettingsTab extends PluginSettingTab {
     const result = await runSelfTest(
       payload,
       passphrase,
-      fetch,
+      // Bewusst der Browser-Weg: er übt genau den HTTP-Pfad aus, den PouchDB im
+      // Normalbetrieb nimmt — inklusive CORS-Preflight (Begründung ausführlich
+      // in browserFetch.ts). Der requestUrl-Weg wird zusätzlich geprüft.
+      browserFetch,
       makeRequestUrlFetch(requestUrl),
     );
     const icon = (ok: boolean): string => (ok ? "✅" : "❌");

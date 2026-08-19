@@ -16,11 +16,13 @@ const PROBE = "vaultbridge-selftest";
 export async function runSelfTest(
   payload: SetupPayload,
   passphrase: string,
-  // Standard bleibt das Browser-`fetch`: es übt exakt den Pfad aus, den PouchDB
-  // im Normalbetrieb nimmt, inklusive CORS-Preflight. Wird zusätzlich ein
-  // requestUrl-Adapter übergeben, wird der zweite Weg separat geprüft — so
-  // sieht man auf einen Blick, ob ein Umstellen der Verbindungsart hilft.
-  fetchFn: typeof fetch = fetch,
+  // Pflichtparameter ohne Standardwert, damit das globale `fetch` nur an der
+  // aufrufenden Stelle benannt wird. Erwartet wird dort das Browser-`fetch`: es
+  // übt exakt den Pfad aus, den PouchDB im Normalbetrieb nimmt, inklusive
+  // CORS-Preflight. Wird zusätzlich ein requestUrl-Adapter übergeben, wird der
+  // zweite Weg separat geprüft — so sieht man auf einen Blick, ob ein Umstellen
+  // der Verbindungsart hilft.
+  fetchFn: typeof fetch,
   requestUrlFetch?: typeof fetch,
 ): Promise<SelfTestResult> {
   let cryptoResult = { ok: false, message: "" };

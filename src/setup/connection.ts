@@ -6,12 +6,14 @@ export interface ConnectionResult {
 
 export async function testConnection(
   payload: { couchUrl: string; db: string; user: string; pass: string },
-  // Standard ist das Browser-`fetch`, weil es genau den Pfad prüft, den PouchDB
-  // im Normalbetrieb nimmt — inklusive CORS-Preflight. Der Selbsttest ruft diese
-  // Funktion zusätzlich mit dem requestUrl-Adapter auf, um beide Wege getrennt
-  // auszuweisen. Den Default hier NICHT auf requestUrl umstellen: der umgeht
-  // CORS und würde den Test fälschlich grün machen.
-  fetchFn: typeof fetch = fetch,
+  // Pflichtparameter ohne Standardwert: Der Aufrufer entscheidet bewusst, welchen
+  // HTTP-Weg er prüft, und nur dort wird das globale `fetch` überhaupt benannt.
+  // Wichtig bleibt die Begründung: Das Browser-`fetch` prüft genau den Pfad, den
+  // PouchDB im Normalbetrieb nimmt — inklusive CORS-Preflight. Der Selbsttest
+  // ruft diese Funktion zusätzlich mit dem requestUrl-Adapter auf, um beide Wege
+  // getrennt auszuweisen. Hier NIE auf requestUrl vorbelegen: der umgeht CORS und
+  // würde den Test fälschlich grün machen.
+  fetchFn: typeof fetch,
 ): Promise<ConnectionResult> {
   const authHeader = "Basic " + btoa(`${payload.user}:${payload.pass}`);
   const rootUrl = payload.couchUrl.replace(/\/$/, "") + "/";

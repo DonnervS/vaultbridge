@@ -4,6 +4,7 @@ import { encodeSetup, SetupPayload } from "../setup/setupString";
 import { bytesToBase64url } from "../crypto/encoding";
 import { checkCouchUrl } from "../setup/couchUrl";
 import { testConnection } from "../setup/connection";
+import { browserFetch } from "../setup/browserFetch";
 
 const KDF_ITERATIONS = 210000;
 const CHUNK_SIZE = 100000;
@@ -136,12 +137,18 @@ export class GeneratorModal extends Modal {
     }
     resultEl.setText("Test läuft …");
     const { normalized } = checkCouchUrl(this.couchUrl);
-    const result = await testConnection({
-      couchUrl: normalized || this.couchUrl,
-      db: this.db,
-      user: this.user,
-      pass: this.pass,
-    });
+    const result = await testConnection(
+      {
+        couchUrl: normalized || this.couchUrl,
+        db: this.db,
+        user: this.user,
+        pass: this.pass,
+      },
+      // Bewusst der Browser-Weg statt requestUrl: nur so wird genau der HTTP-Weg
+      // geprüft, den PouchDB im Normalbetrieb nimmt — inklusive CORS-Preflight
+      // (Begründung ausführlich in browserFetch.ts).
+      browserFetch,
+    );
     resultEl.setText(`${result.ok ? "✅" : "❌"} ${result.message}`);
   }
 
