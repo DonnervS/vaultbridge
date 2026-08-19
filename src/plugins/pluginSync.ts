@@ -1,7 +1,9 @@
 // Ermittelt aus geänderten Pfaden die betroffenen Plugin-Ids (ohne Vaultbridge
 // selbst). Der Konfigordner ist bei Obsidian konfigurierbar (meist ".obsidian"),
-// daher wird das Präfix aus dem echten configDir gebildet, nicht hartkodiert.
-export function planPluginReload(changedPaths: string[], configDir = ".obsidian"): string[] {
+// daher MUSS das echte configDir (Vault#configDir) übergeben werden. Bewusst
+// ohne Standardwert: ein vergessener Aufruf ist so ein Compile-Fehler und fällt
+// nicht still auf einen falschen Ordner zurück.
+export function planPluginReload(changedPaths: string[], configDir: string): string[] {
   const ids = new Set<string>();
   const prefix = configDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // Regex-Sonderzeichen escapen
   const re = new RegExp(`^${prefix}/plugins/([^/]+)/`);
